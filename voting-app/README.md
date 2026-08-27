@@ -240,7 +240,7 @@ MIT License
 ## Support
 
 For issues or questions, please open an issue in the repository.
-And if you aren't sure about your idea or fix please kindly contact me.
+And if you aren't sure about your idea or fix please kindly contact me or just go for it i will check it from your merge request so go on clone it and start working.
 
 ---
 
