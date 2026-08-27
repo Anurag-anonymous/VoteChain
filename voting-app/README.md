@@ -240,7 +240,8 @@ MIT License
 ## Support
 
 For issues or questions, please open an issue in the repository.
+And if you aren't sure about your idea or fix please kindly contact me.
 
 ---
 
-**Note**: This is a testnet implementation. For production, ensure proper security audits, legal compliance, and mainnet deployment procedures.
+**Note**: This is a testnet implementation. For production, ensure proper security audits, legal compliance, and mainnet deployment procedures as we are just using it as our project so we can ignore those compliances till it gets fully ready.
