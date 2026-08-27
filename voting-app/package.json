@@ -1,0 +1,32 @@
+{
+  "name": "voting-app",
+  "version": "1.0.0",
+  "description": "Blockchain-based voting platform with Aadhar verification",
+  "main": "index.js",
+  "scripts": {
+    "install-all": "npm install && cd backend && npm install && cd ../frontend && npm install && cd ../smart-contracts && npm install",
+    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
+    "start:backend": "cd backend && npm start",
+    "start:frontend": "cd frontend && npm start",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm start",
+    "build": "cd frontend && npm run build",
+    "test": "concurrently \"npm run test:backend\" \"npm run test:contracts\"",
+    "test:backend": "cd backend && npm test",
+    "test:contracts": "cd smart-contracts && npm test",
+    "lint": "concurrently \"cd backend && npm run lint\" \"cd frontend && npm run lint\""
+  },
+  "keywords": [
+    "blockchain",
+    "voting",
+    "polygon",
+    "aadhar",
+    "ethereum"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}

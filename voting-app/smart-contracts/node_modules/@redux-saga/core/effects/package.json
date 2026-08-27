@@ -1,0 +1,7 @@
+{
+  "name": "@redux-saga/core/effects",
+  "private": true,
+  "main": "dist/redux-saga-core-effects.cjs.js",
+  "module": "dist/redux-saga-core-effects.esm.js",
+  "types": "../types/effects.d.ts"
+}

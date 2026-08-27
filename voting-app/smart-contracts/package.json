@@ -1,0 +1,30 @@
+{
+  "name": "voting-app-contracts",
+  "version": "1.0.0",
+  "description": "Smart contracts for blockchain voting platform",
+  "main": "index.js",
+  "scripts": {
+    "compile": "truffle compile",
+    "migrate": "truffle migrate",
+    "migrate:reset": "truffle migrate --reset",
+    "test": "truffle test",
+    "develop": "truffle develop"
+  },
+  "keywords": [
+    "blockchain",
+    "voting",
+    "polygon",
+    "ethereum",
+    "solidity",
+    "truffle"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@truffle/hdwallet-provider": "^2.1.1",
+    "truffle": "^5.10.0",
+    "truffle-assertions": "^0.9.2",
+    "@openzeppelin/contracts": "^4.9.0",
+    "dotenv": "^16.0.3"
+  }
+}
