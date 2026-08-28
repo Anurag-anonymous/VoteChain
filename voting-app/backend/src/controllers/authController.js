@@ -2,12 +2,24 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const aadharService = require('../services/aadharService');
 const emailService = require('../services/emailService');
+const smsService = require('../services/smsService');
 const { validateEmail } = require('../utils/validators');
 
 const getOtpMaxAttempts = () => {
   const attempts = Number.parseInt(process.env.OTP_MAX_ATTEMPTS || '5', 10);
   return Number.isFinite(attempts) && attempts > 0 ? attempts : 5;
 };
+
+const getJwtSecret = () => process.env.JWT_SECRET || 'development-jwt-secret-change-me';
+const getRefreshTokenSecret = () => process.env.REFRESH_TOKEN_SECRET || 'development-refresh-secret-change-me';
+
+const getVerificationStatus = (user) => ({
+  emailVerified: user.emailVerified,
+  phoneVerified: user.phoneVerified,
+  aadharVerified: user.aadharVerified
+});
+
+const isFullyVerified = (user) => user.emailVerified && user.phoneVerified && user.aadharVerified;
 
 class AuthController {
   /**
@@ -74,6 +86,8 @@ class AuthController {
       }
 
       const aadharOtp = await aadharService.initiateAadharOTP(aadharNumber, phoneNumber);
+      const emailOtp = aadharService.generateOTP();
+      const phoneOtp = aadharService.generateOTP();
 
       // Create new user
       const user = new User({
@@ -86,29 +100,46 @@ class AuthController {
         aadharOtpRequestId: aadharOtp.requestId
       });
 
-      if (aadharOtp.development) {
-        await user.setOTP(aadharOtp.otp);
-      }
+      user.setChannelOTP('email', emailOtp);
+      user.setChannelOTP('phone', phoneOtp);
+      if (aadharOtp.development) user.setChannelOTP('aadhar', aadharOtp.otp);
+      user.otpAttempts = 0;
+      user.otpLastSent = Date.now();
 
       await user.save();
 
       try {
-        await emailService.sendOTP(email, aadharOtp.development ? aadharOtp.otp : 'sent to Aadhaar-linked mobile', `${firstName} ${lastName}`);
+        await emailService.sendOTP(email, emailOtp, `${firstName} ${lastName}`);
       } catch (emailError) {
-        console.warn('OTP email notification skipped:', emailError.message);
+        console.warn('Email OTP delivery skipped:', emailError.message);
+      }
+
+      try {
+        await smsService.sendOTP(phoneNumber, phoneOtp);
+      } catch (smsError) {
+        console.warn('Phone OTP delivery skipped:', smsError.message);
       }
 
       const responseBody = {
         success: true,
         message: aadharOtp.development
-          ? 'Registration successful. Development Aadhaar OTP generated.'
-          : 'Registration successful. Aadhaar OTP sent to registered mobile.',
+          ? 'Registration successful. Development OTPs generated.'
+          : 'Registration successful. OTPs sent for email, phone, and Aadhaar.',
         userId: user._id,
-        email: user.email
+        email: user.email,
+        verificationStatus: {
+          emailVerified: false,
+          phoneVerified: false,
+          aadharVerified: false
+        }
       };
 
-      if (aadharOtp.development) {
-        responseBody.devOtp = aadharOtp.otp;
+      if (process.env.NODE_ENV !== 'production') {
+        responseBody.devOtps = {
+          email: emailOtp,
+          phone: phoneOtp,
+          aadhar: aadharOtp.otp
+        };
       }
 
       res.status(201).json(responseBody);
@@ -121,27 +152,93 @@ class AuthController {
     }
   }
 
+  static async verifyEmailOTP(req, res) {
+    try {
+      const { userId, otp } = req.body;
+      if (!userId || !otp) {
+        return res.status(400).json({
+          success: false,
+          message: 'User ID and email OTP are required'
+        });
+      }
+
+      const user = await User.findById(userId).select('+emailOtp +emailOtpExpiry');
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+
+      if (!user.verifyChannelOTP('email', otp)) {
+        return res.status(400).json({ success: false, message: 'Invalid or expired email OTP' });
+      }
+
+      user.emailVerified = true;
+      user.clearChannelOTP('email');
+      await user.save();
+
+      return res.status(200).json({
+        success: true,
+        message: 'Email verified successfully',
+        verificationStatus: getVerificationStatus(user),
+        fullyVerified: isFullyVerified(user)
+      });
+    } catch (error) {
+      console.error('Email OTP verification error:', error);
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  static async verifyPhoneOTP(req, res) {
+    try {
+      const { userId, otp } = req.body;
+      if (!userId || !otp) {
+        return res.status(400).json({
+          success: false,
+          message: 'User ID and phone OTP are required'
+        });
+      }
+
+      const user = await User.findById(userId).select('+phoneOtp +phoneOtpExpiry');
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+
+      if (!user.verifyChannelOTP('phone', otp)) {
+        return res.status(400).json({ success: false, message: 'Invalid or expired phone OTP' });
+      }
+
+      user.phoneVerified = true;
+      user.clearChannelOTP('phone');
+      await user.save();
+
+      return res.status(200).json({
+        success: true,
+        message: 'Phone number verified successfully',
+        verificationStatus: getVerificationStatus(user),
+        fullyVerified: isFullyVerified(user)
+      });
+    } catch (error) {
+      console.error('Phone OTP verification error:', error);
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
   /**
-   * Verify OTP
+   * Verify Aadhaar OTP
    */
-  static async verifyOTP(req, res) {
+  static async verifyAadhaarOTP(req, res) {
     try {
       const { userId, otp } = req.body;
 
       if (!userId || !otp) {
         return res.status(400).json({
           success: false,
-          message: 'User ID and OTP are required'
+          message: 'User ID and Aadhaar OTP are required'
         });
       }
 
-      const user = await User.findById(userId).select('+otp +otpExpiry +otpAttempts +aadharOtpRequestId');
-      
+      const user = await User.findById(userId).select('+aadharOtp +aadharOtpExpiry +otpAttempts +aadharOtpRequestId');
       if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
+        return res.status(404).json({ success: false, message: 'User not found' });
       }
 
       let otpVerified = false;
@@ -150,7 +247,7 @@ class AuthController {
         await aadharService.verifyAadharOTP(user.aadharOtpRequestId, otp, user.aadharNumber);
         otpVerified = true;
       } else {
-        otpVerified = user.verifyOTP(otp);
+        otpVerified = user.verifyChannelOTP('aadhar', otp);
       }
 
       if (!otpVerified) {
@@ -161,43 +258,52 @@ class AuthController {
         if (user.otpAttempts >= maxAttempts) {
           return res.status(429).json({
             success: false,
-            message: 'Maximum OTP attempts exceeded. Please request a new OTP.'
+            message: 'Maximum Aadhaar OTP attempts exceeded. Please request a new OTP.'
           });
         }
 
         return res.status(400).json({
           success: false,
-          message: 'Invalid or expired OTP',
+          message: 'Invalid or expired Aadhaar OTP',
           attemptsRemaining: maxAttempts - user.otpAttempts
         });
       }
 
-      // Mark as verified
       user.aadharVerified = true;
       user.aadharVerificationDate = new Date();
       user.otpVerified = true;
-      user.otp = undefined;
-      user.otpExpiry = undefined;
+      user.clearChannelOTP('aadhar');
       user.aadharOtpRequestId = undefined;
       user.otpAttempts = 0;
 
       await user.save();
 
-      // Send welcome email
-      await emailService.sendWelcomeEmail(user.email, user.firstName);
+      if (isFullyVerified(user)) {
+        try {
+          await emailService.sendWelcomeEmail(user.email, user.firstName);
+        } catch (emailError) {
+          console.warn('Welcome email skipped:', emailError.message);
+        }
+      }
 
       res.status(200).json({
         success: true,
-        message: 'OTP verified successfully. Your account is now active.',
-        userId: user._id
+        message: 'Aadhaar OTP verified successfully.',
+        userId: user._id,
+        verificationStatus: getVerificationStatus(user),
+        fullyVerified: isFullyVerified(user)
       });
     } catch (error) {
-      console.error('OTP verification error:', error);
+      console.error('Aadhaar OTP verification error:', error);
       res.status(500).json({
         success: false,
         message: error.message
       });
     }
+  }
+
+  static async verifyOTP(req, res) {
+    return AuthController.verifyAadhaarOTP(req, res);
   }
 
   /**
@@ -214,7 +320,7 @@ class AuthController {
         });
       }
 
-      const user = await User.findById(userId).select('+otpLastSent');
+      const user = await User.findById(userId).select('+otpLastSent +aadharOtpRequestId');
       
       if (!user) {
         return res.status(404).json({
@@ -232,17 +338,28 @@ class AuthController {
         });
       }
 
-      // Generate new OTP
-      const otp = aadharService.generateOTP();
-      await user.setOTP(otp);
+      const aadharOtp = await aadharService.initiateAadharOTP(user.aadharNumber, user.phoneNumber);
+      user.aadharOtpRequestId = aadharOtp.requestId;
 
-      // Send OTP
-      await emailService.sendOTP(user.email, otp, user.firstName);
+      if (aadharOtp.development) {
+        await user.setOTP(aadharOtp.otp);
+      } else {
+        user.otpLastSent = Date.now();
+        await user.save();
+      }
 
-      res.status(200).json({
+      const responseBody = {
         success: true,
-        message: 'New OTP sent to your email'
-      });
+        message: aadharOtp.development
+          ? 'New development Aadhaar OTP generated'
+          : 'New Aadhaar OTP sent to registered mobile'
+      };
+
+      if (aadharOtp.development) {
+        responseBody.devOtp = aadharOtp.otp;
+      }
+
+      res.status(200).json(responseBody);
     } catch (error) {
       console.error('Resend OTP error:', error);
       res.status(500).json({
@@ -299,11 +416,11 @@ class AuthController {
         });
       }
 
-      // Check Aadhar verification
-      if (!user.aadharVerified) {
+      // Check identity verification
+      if (!isFullyVerified(user)) {
         return res.status(403).json({
           success: false,
-          message: 'Aadhar verification required'
+          message: 'Email, phone, and Aadhaar verification required'
         });
       }
 
@@ -317,13 +434,13 @@ class AuthController {
           email: user.email,
           aadharVerified: user.aadharVerified
         },
-        process.env.JWT_SECRET,
+        getJwtSecret(),
         { expiresIn: process.env.JWT_EXPIRE || '7d' }
       );
 
       const refreshToken = jwt.sign(
         { id: user._id },
-        process.env.REFRESH_TOKEN_SECRET,
+        getRefreshTokenSecret(),
         { expiresIn: process.env.REFRESH_TOKEN_EXPIRE || '30d' }
       );
 
@@ -464,9 +581,49 @@ class AuthController {
         });
       }
 
-      const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
+      const decoded = jwt.verify(refreshToken, getRefreshTokenSecret());
       const user = await User.findById(decoded.id);
 
       if (!user) {
         return res.status(404).json({
-          success: false,
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      // Generate new token
+      const newToken = jwt.sign(
+        {
+          id: user._id,
+          email: user.email,
+          aadharVerified: user.aadharVerified
+        },
+        getJwtSecret(),
+        { expiresIn: process.env.JWT_EXPIRE || '7d' }
+      );
+
+      res.status(200).json({
+        success: true,
+        token: newToken
+      });
+    } catch (error) {
+      console.error('Refresh token error:', error);
+      res.status(401).json({
+        success: false,
+        message: 'Invalid refresh token'
+      });
+    }
+  }
+
+  /**
+   * Logout
+   */
+  static async logout(req, res) {
+    res.status(200).json({
+      success: true,
+      message: 'Logout successful'
+    });
+  }
+}
+
+module.exports = AuthController;

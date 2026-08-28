@@ -47,6 +47,38 @@ const userSchema = new mongoose.Schema({
     type: String,
     select: false
   },
+  emailVerified: {
+    type: Boolean,
+    default: false
+  },
+  phoneVerified: {
+    type: Boolean,
+    default: false
+  },
+  emailOtp: {
+    type: String,
+    select: false
+  },
+  emailOtpExpiry: {
+    type: Date,
+    select: false
+  },
+  phoneOtp: {
+    type: String,
+    select: false
+  },
+  phoneOtpExpiry: {
+    type: Date,
+    select: false
+  },
+  aadharOtp: {
+    type: String,
+    select: false
+  },
+  aadharOtpExpiry: {
+    type: Date,
+    select: false
+  },
 
   // Authentication
   password: {
@@ -166,6 +198,29 @@ userSchema.methods.verifyOTP = function(providedOTP) {
   return this.otp === providedOTP;
 };
 
+userSchema.methods.setChannelOTP = function(channel, otp) {
+  const expiry = new Date(Date.now() + getOtpExpireMinutes() * 60 * 1000);
+  this[`${channel}Otp`] = otp;
+  this[`${channel}OtpExpiry`] = expiry;
+  this.otpLastSent = Date.now();
+};
+
+userSchema.methods.verifyChannelOTP = function(channel, providedOTP) {
+  const otp = this[`${channel}Otp`];
+  const expiry = this[`${channel}OtpExpiry`];
+
+  if (!otp || !expiry || expiry.getTime() < Date.now()) {
+    return false;
+  }
+
+  return otp === providedOTP;
+};
+
+userSchema.methods.clearChannelOTP = function(channel) {
+  this[`${channel}Otp`] = undefined;
+  this[`${channel}OtpExpiry`] = undefined;
+};
+
 // Method to increment login attempts
 userSchema.methods.incrementLoginAttempts = function() {
   this.loginAttempts += 1;
@@ -189,6 +244,8 @@ userSchema.methods.resetLoginAttempts = function() {
 userSchema.methods.setOTP = function(otp) {
   this.otp = otp;
   this.otpExpiry = new Date(Date.now() + getOtpExpireMinutes() * 60 * 1000);
+  this.aadharOtp = otp;
+  this.aadharOtpExpiry = this.otpExpiry;
   this.otpAttempts = 0;
   this.otpLastSent = Date.now();
   return this.save();
@@ -199,4 +256,6 @@ userSchema.index({ aadharNumber: 1 }, { unique: true });
 userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ phoneNumber: 1 }, { unique: true });
 userSchema.index({ walletAddress: 1 }, { sparse: true });
-userSchema.index({ createdAt: 
+userSchema.index({ createdAt: -1 });
+
+module.exports = mongoose.model('User', userSchema);
