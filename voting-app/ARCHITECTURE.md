@@ -62,7 +62,7 @@
 
 ### User Registration Flow
 ```
-User → Register Form → Backend → Verify Aadhar → Generate OTP
+User → Register Form → Backend → Verify Aadhar(not implemented currently) → Generate OTP(not implemented currently)
 → Send Email → Verify OTP → Create Account → Store in MongoDB
 ```
 

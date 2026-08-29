@@ -14,3 +14,6 @@ npm-debug.log*
 *.swo
 *~
 .env.*.local
+README.md
+ARCHITECTURE.md
+
