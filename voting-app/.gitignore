@@ -1,15 +1,29 @@
-/.env
-/.env.local
-/node_modules/
-/build/
-/dist/
-/.cache/
-/.next/
-/.DS_Store
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build files
+build/
+dist/
+.cache/
+.next/
+
+# OS files
+.DS_Store
+
+# Logs
 *.log
 npm-debug.log*
+
+# IDE files
 .idea/
 .vscode/
+
+# Temporary/editor files
 *.swp
 *.swo
 *~
