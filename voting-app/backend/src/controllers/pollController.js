@@ -88,7 +88,7 @@ class PollController {
     try {
       const { title, description, options, endDate, category, tags, walletAddress } = req.body;
       const userId = req.userId;
-      const currentUser = await User.findById(userId);
+      const currentUser = await User.findById(userId).select('+walletPrivateKey');
       const shouldUseBlockchain = process.env.BLOCKCHAIN_ENABLED !== 'false';
       const shouldPersistToDatabase = process.env.DATABASE_ENABLED !== 'false';
 
@@ -100,12 +100,25 @@ class PollController {
       }
 
       const effectiveWalletAddress = (walletAddress || currentUser.walletAddress || '').trim();
+      if (walletAddress && currentUser.walletAddress && walletAddress.toLowerCase() !== currentUser.walletAddress.toLowerCase()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Polls must be created with your linked wallet address'
+        });
+      }
 
       // Validation
       if (!title || !description || !options || !endDate || !effectiveWalletAddress) {
         return res.status(400).json({
           success: false,
           message: 'All required fields must be provided'
+        });
+      }
+
+      if (shouldUseBlockchain && !currentUser.walletPrivateKey) {
+        return res.status(400).json({
+          success: false,
+          message: 'Your linked wallet cannot sign local blockchain transactions. Generate a new local wallet on a new account.'
         });
       }
 
@@ -160,11 +173,13 @@ class PollController {
           const blockchainPoll = await blockchainService.createPoll(
             title.trim(),
             pollOptions.map((option) => option.optionText),
-            endDateTime
+            endDateTime,
+            currentUser.walletPrivateKey
           );
 
           poll.blockchainPollId = blockchainPoll.pollId;
           poll.contractTransactionHash = blockchainPoll.transactionHash;
+          poll.contractTransactionFrom = blockchainPoll.from;
           poll.blockNumber = blockchainPoll.blockNumber;
           poll.blockTimestamp = blockchainPoll.blockTimestamp;
 
@@ -209,7 +224,7 @@ class PollController {
       const { pollId } = req.params;
       const { optionId, walletAddress } = req.body;
       const userId = req.userId;
-      const currentUser = await User.findById(userId);
+      const currentUser = await User.findById(userId).select('+walletPrivateKey');
       const shouldUseBlockchain = process.env.BLOCKCHAIN_ENABLED !== 'false';
       const shouldPersistToDatabase = process.env.DATABASE_ENABLED !== 'false';
 
@@ -228,11 +243,24 @@ class PollController {
       }
 
       const effectiveWalletAddress = (walletAddress || currentUser.walletAddress || '').trim();
+      if (walletAddress && currentUser.walletAddress && walletAddress.toLowerCase() !== currentUser.walletAddress.toLowerCase()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Votes must be cast with your linked wallet address'
+        });
+      }
 
       if (!optionId || !effectiveWalletAddress) {
         return res.status(400).json({
           success: false,
           message: 'Option ID and wallet address are required'
+        });
+      }
+
+      if (shouldUseBlockchain && !currentUser.walletPrivateKey) {
+        return res.status(400).json({
+          success: false,
+          message: 'Your linked wallet cannot sign local blockchain transactions. Generate a new local wallet on a new account.'
         });
       }
 
@@ -283,7 +311,8 @@ class PollController {
           // Cast vote on blockchain
           blockchainResult = await blockchainService.castVote(
             poll.blockchainPollId,
-            poll.options.findIndex(opt => opt._id.toString() === optionId)
+            poll.options.findIndex(opt => opt._id.toString() === optionId),
+            currentUser.walletPrivateKey
           );
         }
 

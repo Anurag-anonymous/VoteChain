@@ -1,5 +1,7 @@
 const User = require('../models/User');
 const mongoose = require('mongoose');
+const { Wallet } = require('ethers');
+const blockchainService = require('../services/blockchainService');
 
 class UserController {
   /**
@@ -80,6 +82,13 @@ class UserController {
         if (trimmedWalletAddress) {
           const normalizedWallet = trimmedWalletAddress.toLowerCase();
 
+          if (currentUser.walletAddress && currentUser.walletAddress !== normalizedWallet) {
+            return res.status(400).json({
+              success: false,
+              message: 'Wallet address is locked and cannot be changed after it is generated'
+            });
+          }
+
           if (!/^0x[a-fA-F0-9]{40}$/.test(normalizedWallet)) {
             return res.status(400).json({
               success: false,
@@ -97,20 +106,6 @@ class UserController {
               success: false,
               message: 'Wallet address is already linked to another account'
             });
-          }
-
-          const oldWallet = currentUser.walletAddress;
-
-          if (oldWallet && oldWallet !== normalizedWallet) {
-            allowedFields.walletAddressHistory = [
-              ...(currentUser.walletAddressHistory || []),
-              {
-                previousWalletAddress: oldWallet,
-                newWalletAddress: normalizedWallet,
-                changedAt: new Date()
-              }
-            ];
-            allowedFields.walletAddressChanged = true;
           }
 
           allowedFields.walletAddress = normalizedWallet;
@@ -235,6 +230,83 @@ class UserController {
   }
 
   /**
+   * Generate a unique wallet address for a user
+   */
+  static async generateWalletAddress(req, res) {
+    try {
+      let generatedWalletAddress = null;
+      let generatedWalletPrivateKey = null;
+      let attempts = 0;
+      const maxAttempts = 20;
+
+      while (!generatedWalletAddress && attempts < maxAttempts) {
+        attempts += 1;
+        const wallet = Wallet.createRandom();
+        const candidateAddress = wallet.address.toLowerCase();
+
+        const existingUser = await User.findOne({ walletAddress: candidateAddress });
+
+        if (!existingUser) {
+          generatedWalletAddress = candidateAddress;
+          generatedWalletPrivateKey = wallet.privateKey;
+        }
+      }
+
+      if (!generatedWalletAddress) {
+        return res.status(500).json({
+          success: false,
+          message: 'Unable to generate a unique wallet address'
+        });
+      }
+
+      if (req.userId) {
+        const currentUser = await User.findById(req.userId);
+
+        if (currentUser) {
+          if (currentUser.walletAddress) {
+            return res.status(400).json({
+              success: false,
+              message: 'Wallet address is already generated and cannot be changed',
+              walletAddress: currentUser.walletAddress
+            });
+          }
+
+          const updatePayload = {
+            walletAddress: generatedWalletAddress,
+            walletPrivateKey: generatedWalletPrivateKey,
+            walletVerified: true
+          };
+
+          const user = await User.findByIdAndUpdate(
+            req.userId,
+            updatePayload,
+            { new: true }
+          ).select('-password -otp -otpExpiry');
+
+          await blockchainService.fundWalletIfNeeded(generatedWalletAddress);
+
+          return res.status(200).json({
+            success: true,
+            walletAddress: generatedWalletAddress,
+            user
+          });
+        }
+      }
+
+      res.status(200).json({
+        success: true,
+        walletAddress: generatedWalletAddress,
+        walletPrivateKey: process.env.NODE_ENV === 'production' ? undefined : generatedWalletPrivateKey
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  /**
    * Link wallet to account
    */
   static async linkWallet(req, res) {
@@ -272,22 +344,19 @@ class UserController {
 
       const userData = await User.findById(userId);
       const normalizedWalletAddress = walletAddress.toLowerCase();
+
+      if (userData.walletAddress && userData.walletAddress !== normalizedWalletAddress) {
+        return res.status(400).json({
+          success: false,
+          message: 'Wallet address is locked and cannot be changed after it is generated',
+          walletAddress: userData.walletAddress
+        });
+      }
+
       const updatePayload = {
         walletAddress: normalizedWalletAddress,
         walletVerified: true
       };
-
-      if (userData.walletAddress && userData.walletAddress !== normalizedWalletAddress) {
-        updatePayload.walletAddressHistory = [
-          ...(userData.walletAddressHistory || []),
-          {
-            previousWalletAddress: userData.walletAddress,
-            newWalletAddress: normalizedWalletAddress,
-            changedAt: new Date()
-          }
-        ];
-        updatePayload.walletAddressChanged = true;
-      }
 
       const user = await User.findByIdAndUpdate(
         userId,

@@ -11,7 +11,12 @@ class EmailService {
     }
 
     const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
-    if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS) {
+    const hasPlaceholderConfig =
+      SMTP_USER?.includes('your_') ||
+      SMTP_PASS?.includes('your_') ||
+      SMTP_HOST?.includes('smtp-host');
+
+    if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS || hasPlaceholderConfig) {
       if (process.env.NODE_ENV !== 'production') {
         return null;
       }

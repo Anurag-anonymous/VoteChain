@@ -19,7 +19,12 @@ class AadharService {
   }
 
   hasProviderConfig() {
-    return !!(this.apiKey && this.apiUrl);
+    return !!(
+      this.apiKey &&
+      this.apiUrl &&
+      !this.apiKey.includes('your_') &&
+      !this.apiUrl.includes('aadhar-api-url')
+    );
   }
 
   /**

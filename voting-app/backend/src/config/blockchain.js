@@ -45,6 +45,18 @@ const getSigner = () => {
   }
 };
 
+const getSignerFromPrivateKey = (walletPrivateKey) => {
+  if (!walletPrivateKey) {
+    throw new Error('User wallet private key is not available for signing');
+  }
+
+  try {
+    return new ethers.Wallet(walletPrivateKey, provider);
+  } catch (error) {
+    throw new Error(`Invalid user wallet private key: ${error.message}`);
+  }
+};
+
 const getContractAddress = () => {
   if (!contractAddress || !ethers.isAddress(contractAddress)) {
     throw new Error('Missing or invalid VOTING_CONTRACT_ADDRESS environment variable');
@@ -70,6 +82,7 @@ module.exports = {
   web3,
   provider,
   getSigner,
+  getSignerFromPrivateKey,
   getContractAddress,
   verifyBlockchainConnection,
   chainId: networkConfig.chainId,

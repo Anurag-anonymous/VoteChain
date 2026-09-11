@@ -1,8 +1,10 @@
 const jwt = require('jsonwebtoken');
+const { Wallet } = require('ethers');
 const User = require('../models/User');
 const aadharService = require('../services/aadharService');
 const emailService = require('../services/emailService');
 const smsService = require('../services/smsService');
+const blockchainService = require('../services/blockchainService');
 const { validateEmail } = require('../utils/validators');
 
 const getOtpMaxAttempts = () => {
@@ -15,10 +17,11 @@ const getRefreshTokenSecret = () => process.env.REFRESH_TOKEN_SECRET || 'develop
 
 const getVerificationStatus = (user) => ({
   emailVerified: user.emailVerified,
-  phoneVerified: user.phoneVerified
+  phoneVerified: user.phoneVerified,
+  aadharVerified: user.aadharVerified
 });
 
-const isFullyVerified = (user) => user.emailVerified && user.phoneVerified;
+const isFullyVerified = (user) => user.emailVerified && user.phoneVerified && user.aadharVerified;
 
 class AuthController {
   /**
@@ -26,13 +29,22 @@ class AuthController {
    */
   static async register(req, res) {
     try {
-      const { firstName, lastName, email, phoneNumber, password, walletAddress } = req.body;
+      const {
+        firstName,
+        lastName,
+        email,
+        phoneNumber,
+        password,
+        walletAddress,
+        walletPrivateKey
+      } = req.body;
+      const aadharNumber = req.body.aadharNumber || req.body.aadhaarNumber;
 
       // Validation
-      if (!firstName || !lastName || !email || !phoneNumber || !password) {
+      if (!firstName || !lastName || !email || !phoneNumber || !aadharNumber || !password) {
         return res.status(400).json({
           success: false,
-          message: 'All fields are required'
+          message: 'First name, last name, email, phone number, Aadhaar number, and password are required'
         });
       }
 
@@ -43,16 +55,60 @@ class AuthController {
         });
       }
 
-      if (walletAddress && !/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
+      let normalizedWalletAddress = walletAddress ? walletAddress.toLowerCase() : '';
+      let normalizedWalletPrivateKey = walletPrivateKey;
+
+      if (normalizedWalletAddress && !normalizedWalletPrivateKey) {
+        return res.status(400).json({
+          success: false,
+          message: 'Use Generate Wallet Address so the app can store the local signing key'
+        });
+      }
+
+      if (normalizedWalletPrivateKey) {
+        try {
+          const wallet = new Wallet(normalizedWalletPrivateKey);
+          const privateKeyAddress = wallet.address.toLowerCase();
+
+          if (normalizedWalletAddress && normalizedWalletAddress !== privateKeyAddress) {
+            return res.status(400).json({
+              success: false,
+              message: 'Wallet address does not match the supplied private key'
+            });
+          }
+
+          normalizedWalletAddress = privateKeyAddress;
+        } catch (error) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid wallet private key'
+          });
+        }
+      }
+
+      if (!normalizedWalletAddress) {
+        const wallet = Wallet.createRandom();
+        normalizedWalletAddress = wallet.address.toLowerCase();
+        normalizedWalletPrivateKey = wallet.privateKey;
+      }
+
+      if (normalizedWalletAddress && !/^0x[a-fA-F0-9]{40}$/.test(normalizedWalletAddress)) {
         return res.status(400).json({
           success: false,
           message: 'Invalid wallet address format'
         });
       }
 
-      if (walletAddress) {
+      if (!aadharService.validateAadharFormat(aadharNumber)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid Aadhaar number format (must be 12 digits)'
+        });
+      }
+
+      if (normalizedWalletAddress) {
         const existingWalletUser = await User.findOne({
-          walletAddress: walletAddress.toLowerCase()
+          walletAddress: normalizedWalletAddress
         });
 
         if (existingWalletUser) {
@@ -88,6 +144,16 @@ class AuthController {
         });
       }
 
+      const aadharExists = await User.findOne({ aadharNumber });
+      if (aadharExists) {
+        return res.status(400).json({
+          success: false,
+          message: 'Aadhaar number already registered'
+        });
+      }
+
+      const aadharOtp = await aadharService.initiateAadharOTP(aadharNumber, phoneNumber);
+
       const emailOtp = aadharService.generateOTP();
       const phoneOtp = aadharService.generateOTP();
 
@@ -97,18 +163,32 @@ class AuthController {
         lastName,
         email,
         phoneNumber,
+        aadharNumber,
         password,
-        walletAddress: walletAddress ? walletAddress.toLowerCase() : undefined,
-        walletVerified: !!walletAddress,
+        aadharOtpRequestId: aadharOtp.requestId,
+        walletAddress: normalizedWalletAddress,
+        walletPrivateKey: normalizedWalletPrivateKey,
+        walletVerified: true,
         walletAddressChanged: false
       });
 
       user.setChannelOTP('email', emailOtp);
       user.setChannelOTP('phone', phoneOtp);
+      if (aadharOtp.development) {
+        user.setChannelOTP('aadhar', aadharOtp.otp);
+      }
       user.otpAttempts = 0;
       user.otpLastSent = Date.now();
 
       await user.save();
+
+      if (normalizedWalletPrivateKey) {
+        try {
+          await blockchainService.fundWalletIfNeeded(normalizedWalletAddress);
+        } catch (walletFundingError) {
+          console.warn('Local wallet funding skipped:', walletFundingError.message);
+        }
+      }
 
       try {
         await emailService.sendOTP(email, emailOtp, `${firstName} ${lastName}`);
@@ -124,25 +204,38 @@ class AuthController {
 
       const responseBody = {
         success: true,
-        message: 'Registration successful. OTPs sent for email and phone.',
+        message: aadharOtp.development
+          ? 'Registration successful. Development OTPs generated.'
+          : 'Registration successful. OTPs sent for email, phone, and Aadhaar.',
         userId: user._id,
         email: user.email,
+        walletAddress: user.walletAddress,
         verificationStatus: {
           emailVerified: false,
-          phoneVerified: false
+          phoneVerified: false,
+          aadharVerified: false
         }
       };
 
       if (process.env.NODE_ENV !== 'production') {
         responseBody.devOtps = {
           email: emailOtp,
-          phone: phoneOtp
+          phone: phoneOtp,
+          aadhar: aadharOtp.otp
         };
       }
 
       res.status(201).json(responseBody);
     } catch (error) {
       console.error('Registration error:', error);
+      if (error.code === 11000) {
+        const field = Object.keys(error.keyValue || {})[0] || 'field';
+        return res.status(400).json({
+          success: false,
+          message: `${field} is already registered`
+        });
+      }
+
       res.status(500).json({
         success: false,
         message: error.message
@@ -301,10 +394,7 @@ class AuthController {
   }
 
   static async verifyOTP(req, res) {
-    return res.status(400).json({
-      success: false,
-      message: 'Use /auth/verify-email-otp or /auth/verify-phone-otp to verify OTPs.'
-    });
+    return AuthController.verifyAadhaarOTP(req, res);
   }
 
   /**
@@ -341,9 +431,14 @@ class AuthController {
 
       const emailOtp = aadharService.generateOTP();
       const phoneOtp = aadharService.generateOTP();
+      const aadharOtp = await aadharService.initiateAadharOTP(user.aadharNumber, user.phoneNumber);
 
       user.setChannelOTP('email', emailOtp);
       user.setChannelOTP('phone', phoneOtp);
+      user.aadharOtpRequestId = aadharOtp.requestId;
+      if (aadharOtp.development) {
+        user.setChannelOTP('aadhar', aadharOtp.otp);
+      }
       user.otpAttempts = 0;
       await user.save();
 
@@ -361,12 +456,16 @@ class AuthController {
 
       const responseBody = {
         success: true,
-        message: 'New OTPs sent to your email and phone.',
-        devOtps: {
-          email: emailOtp,
-          phone: phoneOtp
-        }
+        message: 'New OTPs sent for email, phone, and Aadhaar.'
       };
+
+      if (process.env.NODE_ENV !== 'production') {
+        responseBody.devOtps = {
+          email: emailOtp,
+          phone: phoneOtp,
+          aadhar: aadharOtp.otp
+        };
+      }
 
       res.status(200).json(responseBody);
     } catch (error) {

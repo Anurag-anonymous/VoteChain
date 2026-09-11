@@ -28,5 +28,6 @@ npm-debug.log*
 *.swo
 *~
 .env.*.local
+.env.example
 
 

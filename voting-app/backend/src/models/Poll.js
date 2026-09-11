@@ -81,6 +81,7 @@ const pollSchema = new mongoose.Schema({
   },
   contractAddress: String,
   contractTransactionHash: String,
+  contractTransactionFrom: String,
   blockNumber: Number,
   blockTimestamp: Date,
 

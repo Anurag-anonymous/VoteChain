@@ -7,6 +7,7 @@ import { useAuthStore } from '../store/authStore';
 const ProfilePage = () => {
   const { isAuthenticated, user, updateUser } = useAuthStore();
   const [loading, setLoading] = useState(false);
+  const [generatingWallet, setGeneratingWallet] = useState(false);
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -41,6 +42,22 @@ const ProfilePage = () => {
       ...prev,
       [name]: value
     }));
+  };
+
+  const handleGenerateWalletAddress = async () => {
+    setGeneratingWallet(true);
+    try {
+      const response = await userService.generateWalletAddressForProfile();
+      setFormData((prev) => ({ ...prev, walletAddress: response.data.walletAddress }));
+      if (response.data.user) {
+        updateUser(response.data.user);
+      }
+      toast.success('Wallet address generated successfully');
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to generate wallet address');
+    } finally {
+      setGeneratingWallet(false);
+    }
   };
 
   const handleSubmit = async (event) => {
@@ -131,14 +148,24 @@ const ProfilePage = () => {
 
           <div>
             <label className="block text-gray-700 font-semibold mb-2">Wallet Address</label>
-            <input
-              type="text"
-              name="walletAddress"
-              value={formData.walletAddress}
-              onChange={handleChange}
-              placeholder="0x..."
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
-            />
+            <div className="flex gap-2">
+              <input
+                type="text"
+                name="walletAddress"
+                value={formData.walletAddress}
+                onChange={handleChange}
+                placeholder="0x..."
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
+              />
+              <button
+                type="button"
+                onClick={handleGenerateWalletAddress}
+                disabled={generatingWallet}
+                className="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-lg font-semibold hover:bg-indigo-200 transition disabled:opacity-50"
+              >
+                {generatingWallet ? 'Generating...' : 'Generate Wallet Address'}
+              </button>
+            </div>
             <p className="text-sm text-gray-500 mt-2">
               Changing your wallet address will be tracked in the wallet history, while existing contributions stay on record for identity tracking.
             </p>

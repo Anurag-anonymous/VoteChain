@@ -1,4 +1,4 @@
-const { provider, getSigner, getContractAddress } = require('../config/blockchain');
+const { provider, getSigner, getSignerFromPrivateKey, getContractAddress, network } = require('../config/blockchain');
 const ethers = require('ethers');
 
 // ABI for the Voting contract (simplified)
@@ -18,14 +18,36 @@ class BlockchainService {
     return process.env.BLOCKCHAIN_ENABLED !== 'false';
   }
 
-  getContract() {
-    return new ethers.Contract(getContractAddress(), VOTING_CONTRACT_ABI, getSigner());
+  getSigner(walletPrivateKey) {
+    return walletPrivateKey ? getSignerFromPrivateKey(walletPrivateKey) : getSigner();
+  }
+
+  getContract(walletPrivateKey) {
+    return new ethers.Contract(getContractAddress(), VOTING_CONTRACT_ABI, this.getSigner(walletPrivateKey));
+  }
+
+  async fundWalletIfNeeded(walletAddress) {
+    if (!['anvil', 'local'].includes(network) || !walletAddress) {
+      return;
+    }
+
+    const balance = await provider.getBalance(walletAddress);
+    const minimumBalance = ethers.parseEther(process.env.LOCAL_WALLET_MIN_BALANCE || '0.1');
+
+    if (balance >= minimumBalance) {
+      return;
+    }
+
+    const amount = ethers.parseEther(process.env.LOCAL_WALLET_FUND_AMOUNT || '1');
+    const funder = getSigner();
+    const tx = await funder.sendTransaction({ to: walletAddress, value: amount });
+    await tx.wait();
   }
 
   /**
    * Create a new poll on blockchain
    */
-  async createPoll(title, options, endTime) {
+  async createPoll(title, options, endTime, walletPrivateKey) {
     try {
       if (!this.isBlockchainEnabled()) {
         return {
@@ -38,7 +60,10 @@ class BlockchainService {
         };
       }
 
-      const contract = this.getContract();
+      const signer = this.getSigner(walletPrivateKey);
+      await this.fundWalletIfNeeded(await signer.getAddress());
+
+      const contract = this.getContract(walletPrivateKey);
       const pollCountBefore = Number(await contract.pollCount());
 
       const tx = await contract.createPoll(
@@ -53,6 +78,7 @@ class BlockchainService {
         success: true,
         pollId: pollCountBefore,
         transactionHash: receipt.hash,
+        from: await signer.getAddress(),
         blockNumber: receipt.blockNumber,
         blockTimestamp: new Date(),
         gasUsed: receipt.gasUsed.toString()
@@ -66,7 +92,7 @@ class BlockchainService {
   /**
    * Cast vote on blockchain
    */
-  async castVote(pollId, optionIndex) {
+  async castVote(pollId, optionIndex, walletPrivateKey) {
     try {
       if (!this.isBlockchainEnabled()) {
         return {
@@ -88,12 +114,16 @@ class BlockchainService {
         throw new Error(`Invalid option index for blockchain vote: ${optionIndex}`);
       }
 
-      const tx = await this.getContract().vote(numericPollId, numericOptionIndex);
+      const signer = this.getSigner(walletPrivateKey);
+      await this.fundWalletIfNeeded(await signer.getAddress());
+
+      const tx = await this.getContract(walletPrivateKey).vote(numericPollId, numericOptionIndex);
       const receipt = await tx.wait();
 
       return {
         success: true,
         transactionHash: receipt.hash,
+        from: await signer.getAddress(),
         blockNumber: receipt.blockNumber,
         gasUsed: receipt.gasUsed.toString()
       };
