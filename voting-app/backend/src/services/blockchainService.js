@@ -5,6 +5,7 @@ const ethers = require('ethers');
 const VOTING_CONTRACT_ABI = [
   'function createPoll(string memory title, string[] memory options, uint256 endTime) public returns (uint256)',
   'function vote(uint256 pollId, uint256 optionIndex) public',
+  'function pollCount() public view returns (uint256)',
   'function getPoll(uint256 pollId) public view returns (tuple(uint256 id, address creator, string title, string[] options, uint256[] votes, uint256 endTime, bool active))',
   'function getPollResults(uint256 pollId) public view returns (uint256[])',
   'function hasVoted(uint256 pollId, address voter) public view returns (bool)',
@@ -13,6 +14,10 @@ const VOTING_CONTRACT_ABI = [
 ];
 
 class BlockchainService {
+  isBlockchainEnabled() {
+    return process.env.BLOCKCHAIN_ENABLED !== 'false';
+  }
+
   getContract() {
     return new ethers.Contract(getContractAddress(), VOTING_CONTRACT_ABI, getSigner());
   }
@@ -20,9 +25,23 @@ class BlockchainService {
   /**
    * Create a new poll on blockchain
    */
-  async createPoll(pollId, title, options, endTime) {
+  async createPoll(title, options, endTime) {
     try {
-      const tx = await this.getContract().createPoll(
+      if (!this.isBlockchainEnabled()) {
+        return {
+          success: true,
+          pollId: 0,
+          transactionHash: 'BLOCKCHAIN_DISABLED',
+          blockNumber: null,
+          blockTimestamp: new Date(),
+          gasUsed: '0'
+        };
+      }
+
+      const contract = this.getContract();
+      const pollCountBefore = Number(await contract.pollCount());
+
+      const tx = await contract.createPoll(
         title,
         options,
         Math.floor(endTime.getTime() / 1000)
@@ -32,6 +51,7 @@ class BlockchainService {
 
       return {
         success: true,
+        pollId: pollCountBefore,
         transactionHash: receipt.hash,
         blockNumber: receipt.blockNumber,
         blockTimestamp: new Date(),
@@ -48,7 +68,27 @@ class BlockchainService {
    */
   async castVote(pollId, optionIndex) {
     try {
-      const tx = await this.getContract().vote(pollId, optionIndex);
+      if (!this.isBlockchainEnabled()) {
+        return {
+          success: true,
+          transactionHash: 'BLOCKCHAIN_DISABLED',
+          blockNumber: null,
+          gasUsed: '0'
+        };
+      }
+
+      const numericPollId = Number(pollId);
+      const numericOptionIndex = Number(optionIndex);
+
+      if (!Number.isInteger(numericPollId) || numericPollId < 0) {
+        throw new Error(`Invalid poll ID for blockchain vote: ${pollId}`);
+      }
+
+      if (!Number.isInteger(numericOptionIndex) || numericOptionIndex < 0) {
+        throw new Error(`Invalid option index for blockchain vote: ${optionIndex}`);
+      }
+
+      const tx = await this.getContract().vote(numericPollId, numericOptionIndex);
       const receipt = await tx.wait();
 
       return {

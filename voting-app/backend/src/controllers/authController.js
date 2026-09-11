@@ -15,11 +15,10 @@ const getRefreshTokenSecret = () => process.env.REFRESH_TOKEN_SECRET || 'develop
 
 const getVerificationStatus = (user) => ({
   emailVerified: user.emailVerified,
-  phoneVerified: user.phoneVerified,
-  aadharVerified: user.aadharVerified
+  phoneVerified: user.phoneVerified
 });
 
-const isFullyVerified = (user) => user.emailVerified && user.phoneVerified && user.aadharVerified;
+const isFullyVerified = (user) => user.emailVerified && user.phoneVerified;
 
 class AuthController {
   /**
@@ -27,10 +26,10 @@ class AuthController {
    */
   static async register(req, res) {
     try {
-      const { firstName, lastName, email, phoneNumber, aadharNumber, password } = req.body;
+      const { firstName, lastName, email, phoneNumber, password, walletAddress } = req.body;
 
       // Validation
-      if (!firstName || !lastName || !email || !phoneNumber || !aadharNumber || !password) {
+      if (!firstName || !lastName || !email || !phoneNumber || !password) {
         return res.status(400).json({
           success: false,
           message: 'All fields are required'
@@ -44,26 +43,30 @@ class AuthController {
         });
       }
 
-      if (!aadharService.validateAadharFormat(aadharNumber)) {
+      if (walletAddress && !/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
         return res.status(400).json({
           success: false,
-          message: 'Invalid Aadhar number format (must be 12 digits)'
+          message: 'Invalid wallet address format'
         });
+      }
+
+      if (walletAddress) {
+        const existingWalletUser = await User.findOne({
+          walletAddress: walletAddress.toLowerCase()
+        });
+
+        if (existingWalletUser) {
+          return res.status(400).json({
+            success: false,
+            message: 'Wallet address is already linked to another account'
+          });
+        }
       }
 
       if (password.length < 8) {
         return res.status(400).json({
           success: false,
           message: 'Password must be at least 8 characters'
-        });
-      }
-
-      // Check if Aadhar already registered
-      const existingUser = await User.findOne({ aadharNumber });
-      if (existingUser) {
-        return res.status(400).json({
-          success: false,
-          message: 'This Aadhar number is already registered'
         });
       }
 
@@ -85,7 +88,6 @@ class AuthController {
         });
       }
 
-      const aadharOtp = await aadharService.initiateAadharOTP(aadharNumber, phoneNumber);
       const emailOtp = aadharService.generateOTP();
       const phoneOtp = aadharService.generateOTP();
 
@@ -95,14 +97,14 @@ class AuthController {
         lastName,
         email,
         phoneNumber,
-        aadharNumber,
         password,
-        aadharOtpRequestId: aadharOtp.requestId
+        walletAddress: walletAddress ? walletAddress.toLowerCase() : undefined,
+        walletVerified: !!walletAddress,
+        walletAddressChanged: false
       });
 
       user.setChannelOTP('email', emailOtp);
       user.setChannelOTP('phone', phoneOtp);
-      if (aadharOtp.development) user.setChannelOTP('aadhar', aadharOtp.otp);
       user.otpAttempts = 0;
       user.otpLastSent = Date.now();
 
@@ -122,23 +124,19 @@ class AuthController {
 
       const responseBody = {
         success: true,
-        message: aadharOtp.development
-          ? 'Registration successful. Development OTPs generated.'
-          : 'Registration successful. OTPs sent for email, phone, and Aadhaar.',
+        message: 'Registration successful. OTPs sent for email and phone.',
         userId: user._id,
         email: user.email,
         verificationStatus: {
           emailVerified: false,
-          phoneVerified: false,
-          aadharVerified: false
+          phoneVerified: false
         }
       };
 
       if (process.env.NODE_ENV !== 'production') {
         responseBody.devOtps = {
           email: emailOtp,
-          phone: phoneOtp,
-          aadhar: aadharOtp.otp
+          phone: phoneOtp
         };
       }
 
@@ -303,7 +301,10 @@ class AuthController {
   }
 
   static async verifyOTP(req, res) {
-    return AuthController.verifyAadhaarOTP(req, res);
+    return res.status(400).json({
+      success: false,
+      message: 'Use /auth/verify-email-otp or /auth/verify-phone-otp to verify OTPs.'
+    });
   }
 
   /**
@@ -338,26 +339,34 @@ class AuthController {
         });
       }
 
-      const aadharOtp = await aadharService.initiateAadharOTP(user.aadharNumber, user.phoneNumber);
-      user.aadharOtpRequestId = aadharOtp.requestId;
+      const emailOtp = aadharService.generateOTP();
+      const phoneOtp = aadharService.generateOTP();
 
-      if (aadharOtp.development) {
-        await user.setOTP(aadharOtp.otp);
-      } else {
-        user.otpLastSent = Date.now();
-        await user.save();
+      user.setChannelOTP('email', emailOtp);
+      user.setChannelOTP('phone', phoneOtp);
+      user.otpAttempts = 0;
+      await user.save();
+
+      try {
+        await emailService.sendOTP(user.email, emailOtp, `${user.firstName} ${user.lastName}`);
+      } catch (emailError) {
+        console.warn('Email OTP resend skipped:', emailError.message);
+      }
+
+      try {
+        await smsService.sendOTP(user.phoneNumber, phoneOtp);
+      } catch (smsError) {
+        console.warn('Phone OTP resend skipped:', smsError.message);
       }
 
       const responseBody = {
         success: true,
-        message: aadharOtp.development
-          ? 'New development Aadhaar OTP generated'
-          : 'New Aadhaar OTP sent to registered mobile'
+        message: 'New OTPs sent to your email and phone.',
+        devOtps: {
+          email: emailOtp,
+          phone: phoneOtp
+        }
       };
-
-      if (aadharOtp.development) {
-        responseBody.devOtp = aadharOtp.otp;
-      }
 
       res.status(200).json(responseBody);
     } catch (error) {
@@ -420,7 +429,7 @@ class AuthController {
       if (!isFullyVerified(user)) {
         return res.status(403).json({
           success: false,
-          message: 'Email, phone, and Aadhaar verification required'
+          message: 'Email and phone verification required'
         });
       }
 
@@ -431,8 +440,7 @@ class AuthController {
       const token = jwt.sign(
         {
           id: user._id,
-          email: user.email,
-          aadharVerified: user.aadharVerified
+          email: user.email
         },
         getJwtSecret(),
         { expiresIn: process.env.JWT_EXPIRE || '7d' }
@@ -454,7 +462,8 @@ class AuthController {
           firstName: user.firstName,
           lastName: user.lastName,
           email: user.email,
-          aadharVerified: user.aadharVerified
+          walletAddress: user.walletAddress || null,
+          walletVerified: !!user.walletVerified
         }
       });
     } catch (error) {
@@ -471,16 +480,16 @@ class AuthController {
    */
   static async resetPasswordRequest(req, res) {
     try {
-      const { email, aadharNumber } = req.body;
+      const { email } = req.body;
 
-      if (!email || !aadharNumber) {
+      if (!email) {
         return res.status(400).json({
           success: false,
-          message: 'Email and Aadhar number are required'
+          message: 'Email is required'
         });
       }
 
-      const user = await User.findOne({ email, aadharNumber });
+      const user = await User.findOne({ email });
       
       if (!user) {
         return res.status(404).json({
@@ -595,8 +604,7 @@ class AuthController {
       const newToken = jwt.sign(
         {
           id: user._id,
-          email: user.email,
-          aadharVerified: user.aadharVerified
+          email: user.email
         },
         getJwtSecret(),
         { expiresIn: process.env.JWT_EXPIRE || '7d' }

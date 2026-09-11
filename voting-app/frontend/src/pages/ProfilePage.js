@@ -1,31 +1,180 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
+import { toast } from 'react-toastify';
+import { userService } from '../services';
 import { useAuthStore } from '../store/authStore';
 
 const ProfilePage = () => {
-  const { isAuthenticated, user } = useAuthStore();
+  const { isAuthenticated, user, updateUser } = useAuthStore();
+  const [loading, setLoading] = useState(false);
+  const [formData, setFormData] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    phoneNumber: '',
+    walletAddress: '',
+    bio: '',
+    profileImage: ''
+  });
+
+  useEffect(() => {
+    if (user) {
+      setFormData({
+        firstName: user.firstName || '',
+        lastName: user.lastName || '',
+        email: user.email || '',
+        phoneNumber: user.phoneNumber || '',
+        walletAddress: user.walletAddress || '',
+        bio: user.bio || '',
+        profileImage: user.profileImage || ''
+      });
+    }
+  }, [user]);
 
   if (!isAuthenticated) {
     return <Navigate to="/login" />;
   }
 
+  const handleChange = (event) => {
+    const { name, value } = event.target;
+    setFormData((prev) => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+
+    try {
+      setLoading(true);
+      const response = await userService.updateProfile(formData);
+      updateUser(response.data.user);
+      toast.success('Profile updated successfully');
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to update profile');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-3xl mx-auto">
       <h1 className="text-4xl font-bold mb-8">My Profile</h1>
+
       <div className="bg-white p-8 rounded-lg shadow-md">
-        <div className="space-y-4">
-          <div>
-            <p className="text-gray-600">Name</p>
-            <p className="text-xl font-bold">{user?.firstName} {user?.lastName}</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          <div className="bg-indigo-50 p-4 rounded-lg">
+            <p className="text-sm text-gray-500">Polls created</p>
+            <p className="text-2xl font-bold text-indigo-700">{user?.pollsCreated || 0}</p>
           </div>
-          <div>
-            <p className="text-gray-600">Email</p>
-            <p className="text-xl font-bold">{user?.email}</p>
+          <div className="bg-indigo-50 p-4 rounded-lg">
+            <p className="text-sm text-gray-500">Votes cast</p>
+            <p className="text-2xl font-bold text-indigo-700">{user?.votesCount || 0}</p>
           </div>
-          <div>
-            <p className="text-gray-600">Profile form and more details will be displayed here</p>
+          <div className="bg-indigo-50 p-4 rounded-lg">
+            <p className="text-sm text-gray-500">Wallet status</p>
+            <p className="text-sm font-bold text-indigo-700">
+              {user?.walletAddress ? 'Linked' : 'Not linked'}
+            </p>
           </div>
         </div>
+
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-gray-700 font-semibold mb-2">First Name</label>
+              <input
+                type="text"
+                name="firstName"
+                value={formData.firstName}
+                onChange={handleChange}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
+              />
+            </div>
+
+            <div>
+              <label className="block text-gray-700 font-semibold mb-2">Last Name</label>
+              <input
+                type="text"
+                name="lastName"
+                value={formData.lastName}
+                onChange={handleChange}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-gray-700 font-semibold mb-2">Email</label>
+              <input
+                type="email"
+                name="email"
+                value={formData.email}
+                onChange={handleChange}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
+              />
+            </div>
+
+            <div>
+              <label className="block text-gray-700 font-semibold mb-2">Phone Number</label>
+              <input
+                type="tel"
+                name="phoneNumber"
+                value={formData.phoneNumber}
+                onChange={handleChange}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-gray-700 font-semibold mb-2">Wallet Address</label>
+            <input
+              type="text"
+              name="walletAddress"
+              value={formData.walletAddress}
+              onChange={handleChange}
+              placeholder="0x..."
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
+            />
+            <p className="text-sm text-gray-500 mt-2">
+              Changing your wallet address will be tracked in the wallet history, while existing contributions stay on record for identity tracking.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-gray-700 font-semibold mb-2">Profile Image URL</label>
+            <input
+              type="text"
+              name="profileImage"
+              value={formData.profileImage}
+              onChange={handleChange}
+              placeholder="https://example.com/profile.jpg"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
+            />
+          </div>
+
+          <div>
+            <label className="block text-gray-700 font-semibold mb-2">Bio</label>
+            <textarea
+              name="bio"
+              value={formData.bio}
+              onChange={handleChange}
+              rows="4"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full px-4 py-3 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 transition disabled:opacity-50"
+          >
+            {loading ? 'Saving...' : 'Save Profile'}
+          </button>
+        </form>
       </div>
     </div>
   );

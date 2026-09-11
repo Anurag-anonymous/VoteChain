@@ -88,9 +88,21 @@ class PollController {
     try {
       const { title, description, options, endDate, category, tags, walletAddress } = req.body;
       const userId = req.userId;
+      const currentUser = await User.findById(userId);
+      const shouldUseBlockchain = process.env.BLOCKCHAIN_ENABLED !== 'false';
+      const shouldPersistToDatabase = process.env.DATABASE_ENABLED !== 'false';
+
+      if (!currentUser) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      const effectiveWalletAddress = (walletAddress || currentUser.walletAddress || '').trim();
 
       // Validation
-      if (!title || !description || !options || !endDate || !walletAddress) {
+      if (!title || !description || !options || !endDate || !effectiveWalletAddress) {
         return res.status(400).json({
           success: false,
           message: 'All required fields must be provided'
@@ -133,21 +145,53 @@ class PollController {
         description,
         options: pollOptions,
         creator: userId,
-        creatorWallet: walletAddress,
+        creatorWallet: effectiveWalletAddress,
         endDate: endDateTime,
         category: category || 'other',
         tags: tags || []
       });
 
-      await poll.save();
+      if (shouldPersistToDatabase) {
+        await poll.save();
+      }
+
+      if (shouldUseBlockchain) {
+        try {
+          const blockchainPoll = await blockchainService.createPoll(
+            title.trim(),
+            pollOptions.map((option) => option.optionText),
+            endDateTime
+          );
+
+          poll.blockchainPollId = blockchainPoll.pollId;
+          poll.contractTransactionHash = blockchainPoll.transactionHash;
+          poll.blockNumber = blockchainPoll.blockNumber;
+          poll.blockTimestamp = blockchainPoll.blockTimestamp;
+
+          if (shouldPersistToDatabase) {
+            await poll.save();
+          }
+        } catch (blockchainError) {
+          console.error('Blockchain poll creation failed:', blockchainError);
+          return res.status(500).json({
+            success: false,
+            message: 'Failed to create poll on blockchain',
+            error: blockchainError.message
+          });
+        }
+      }
 
       // Update user stats
       await User.findByIdAndUpdate(userId, { $inc: { pollsCreated: 1 } });
 
       res.status(201).json({
         success: true,
-        message: 'Poll created successfully',
-        poll
+        message: shouldUseBlockchain
+          ? 'Poll created successfully'
+          : 'Poll created successfully in database-only mode',
+        poll,
+        blockchainEnabled: shouldUseBlockchain,
+        databaseEnabled: shouldPersistToDatabase
       });
     } catch (error) {
       res.status(500).json({
@@ -165,6 +209,16 @@ class PollController {
       const { pollId } = req.params;
       const { optionId, walletAddress } = req.body;
       const userId = req.userId;
+      const currentUser = await User.findById(userId);
+      const shouldUseBlockchain = process.env.BLOCKCHAIN_ENABLED !== 'false';
+      const shouldPersistToDatabase = process.env.DATABASE_ENABLED !== 'false';
+
+      if (!currentUser) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
 
       if (!mongoose.Types.ObjectId.isValid(pollId)) {
         return res.status(400).json({
@@ -173,7 +227,9 @@ class PollController {
         });
       }
 
-      if (!optionId || !walletAddress) {
+      const effectiveWalletAddress = (walletAddress || currentUser.walletAddress || '').trim();
+
+      if (!optionId || !effectiveWalletAddress) {
         return res.status(400).json({
           success: false,
           message: 'Option ID and wallet address are required'
@@ -186,6 +242,13 @@ class PollController {
         return res.status(404).json({
           success: false,
           message: 'Poll not found'
+        });
+      }
+
+      if (shouldUseBlockchain && (poll.blockchainPollId === null || poll.blockchainPollId === undefined)) {
+        return res.status(400).json({
+          success: false,
+          message: 'This poll has not been registered on blockchain yet.'
         });
       }
 
@@ -214,22 +277,30 @@ class PollController {
       }
 
       try {
-        // Cast vote on blockchain
-        const blockchainResult = await blockchainService.castVote(
-          pollId,
-          poll.options.findIndex(opt => opt._id.toString() === optionId)
-        );
+        let blockchainResult = null;
 
-        // Add vote to poll
-        await poll.addVote(userId, walletAddress, optionId, blockchainResult.transactionHash);
+        if (shouldUseBlockchain) {
+          // Cast vote on blockchain
+          blockchainResult = await blockchainService.castVote(
+            poll.blockchainPollId,
+            poll.options.findIndex(opt => opt._id.toString() === optionId)
+          );
+        }
 
-        // Update user stats
-        await User.findByIdAndUpdate(userId, { $inc: { votesCount: 1 } });
+        if (shouldPersistToDatabase) {
+          // Add vote to poll
+          await poll.addVote(userId, effectiveWalletAddress, optionId, blockchainResult ? blockchainResult.transactionHash : 'DATABASE_ONLY');
+
+          // Update user stats
+          await User.findByIdAndUpdate(userId, { $inc: { votesCount: 1 } });
+        }
 
         res.status(200).json({
           success: true,
-          message: 'Vote recorded successfully',
-          transactionHash: blockchainResult.transactionHash,
+          message: shouldUseBlockchain
+            ? 'Vote recorded successfully'
+            : 'Vote recorded in database-only mode',
+          transactionHash: blockchainResult ? blockchainResult.transactionHash : null,
           poll: poll.getResults()
         });
       } catch (blockchainError) {

@@ -82,9 +82,16 @@ npm install
 Create `.env` files:
 
 **backend/.env**
-```
+```env
 PORT=5000
-MONGODB_URI=mongodb://localhost:27017/voting-app
+
+# MongoDB configuration
+MONGODB_MODE=local
+MONGODB_LOCAL_URI=mongodb://localhost:27017/voting-app
+MONGODB_ATLAS_URI=mongodb+srv://username:password@cluster.mongodb.net/voting-app
+# Optional direct override for a full connection string:
+# MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/voting-app
+
 JWT_SECRET=your_jwt_secret_key
 AADHAR_API_KEY=your_aadhar_api_key
 AADHAR_API_URL=https://aadhar-api-url

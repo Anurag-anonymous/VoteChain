@@ -34,8 +34,9 @@ const userSchema = new mongoose.Schema({
   // Aadhar Information
   aadharNumber: {
     type: String,
-    required: true,
     unique: true,
+    sparse: true,
+    trim: true,
     length: 12
   },
   aadharVerified: {
@@ -117,6 +118,18 @@ const userSchema = new mongoose.Schema({
     unique: true,
     sparse: true,
     lowercase: true
+  },
+  walletAddressHistory: [{
+    previousWalletAddress: String,
+    newWalletAddress: String,
+    changedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  walletAddressChanged: {
+    type: Boolean,
+    default: false
   },
   walletVerified: {
     type: Boolean,

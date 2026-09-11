@@ -31,7 +31,14 @@ cp .env.example .env
 Edit `backend/.env` with:
 ```env
 PORT=5000
-MONGODB_URI=mongodb://localhost:27017/voting-app
+
+# MongoDB connection options
+MONGODB_MODE=local
+MONGODB_LOCAL_URI=mongodb://localhost:27017/voting-app
+MONGODB_ATLAS_URI=mongodb+srv://username:password@cluster.mongodb.net/voting-app
+# Optional full override if you already have a connection string:
+# MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/voting-app
+
 JWT_SECRET=your_super_secret_key_here
 POLYGON_RPC_URL=https://rpc-mumbai.maticvigil.com
 POLYGON_CHAIN_ID=80001
@@ -57,7 +64,7 @@ REACT_APP_CHAIN_ID=80001
 
 ### 3. Setup Database
 
-#### Option A: Local MongoDB
+#### Option A: Local MongoDB (Compass / local server)
 ```bash
 # Start MongoDB service
 mongod
@@ -65,11 +72,26 @@ mongod
 # MongoDB will be available at localhost:27017
 ```
 
+Set in `.env`:
+```env
+MONGODB_MODE=local
+MONGODB_LOCAL_URI=mongodb://localhost:27017/voting-app
+```
+
 #### Option B: MongoDB Atlas (Cloud)
 1. Create account at [mongodb.com](https://www.mongodb.com)
 2. Create a cluster
-3. Get connection string
-4. Update `MONGODB_URI` in `.env`
+3. Get your Atlas connection string from MongoDB Compass or Atlas dashboard
+4. Set in `.env`:
+```env
+MONGODB_MODE=atlas
+MONGODB_ATLAS_URI=mongodb+srv://username:password@cluster.mongodb.net/voting-app
+```
+
+If you already have the full connection string, you can also use:
+```env
+MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/voting-app
+```
 
 ### 4. Deploy Smart Contracts
 

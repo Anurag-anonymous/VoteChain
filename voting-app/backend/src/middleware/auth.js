@@ -51,12 +51,12 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
-// Middleware to verify Aadhar verification
+// Middleware to verify email and phone verification
 const verifyAadhar = (req, res, next) => {
-  if (!req.userDoc.emailVerified || !req.userDoc.phoneVerified || !req.userDoc.aadharVerified) {
+  if (!req.userDoc.emailVerified || !req.userDoc.phoneVerified) {
     return res.status(403).json({
       success: false,
-      message: 'Email, phone, and Aadhaar verification required'
+      message: 'Email and phone verification required'
     });
   }
   next();

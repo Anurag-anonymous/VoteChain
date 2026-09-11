@@ -5,7 +5,6 @@ const authService = {
   verifyOTP: (data) => api.post('/auth/verify-otp', data),
   verifyEmailOTP: (data) => api.post('/auth/verify-email-otp', data),
   verifyPhoneOTP: (data) => api.post('/auth/verify-phone-otp', data),
-  verifyAadhaarOTP: (data) => api.post('/auth/verify-aadhaar-otp', data),
   resendOTP: (data) => api.post('/auth/resend-otp', data),
   login: (data) => api.post('/auth/login', data),
   resetPasswordRequest: (data) => api.post('/auth/reset-password-request', data),

@@ -75,6 +75,10 @@ const pollSchema = new mongoose.Schema({
   }],
 
   // Blockchain
+  blockchainPollId: {
+    type: Number,
+    default: null
+  },
   contractAddress: String,
   contractTransactionHash: String,
   blockNumber: Number,

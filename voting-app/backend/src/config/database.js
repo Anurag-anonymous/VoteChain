@@ -1,9 +1,24 @@
 const mongoose = require('mongoose');
 
+const getMongoUri = () => {
+  if (process.env.MONGODB_URI) {
+    return process.env.MONGODB_URI;
+  }
+
+  const mode = (process.env.MONGODB_MODE || 'local').toLowerCase();
+
+  if (mode === 'atlas') {
+    return process.env.MONGODB_ATLAS_URI || 'mongodb+srv://username:password@cluster.mongodb.net/voting-app';
+  }
+
+  return process.env.MONGODB_LOCAL_URI || 'mongodb://127.0.0.1:27017/voting-app';
+};
+
 const connectDB = async () => {
   try {
-    const mongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/voting-app';
-    console.log(`Connecting to MongoDB: ${mongoUri}`);
+    const mongoUri = getMongoUri();
+    console.log(`Connecting to MongoDB using mode: ${process.env.MONGODB_MODE || 'local'}`);
+    console.log(`MongoDB URI: ${mongoUri}`);
 
     const conn = await mongoose.connect(mongoUri, {
       useNewUrlParser: true,

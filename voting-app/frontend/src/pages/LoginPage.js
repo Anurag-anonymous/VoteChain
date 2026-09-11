@@ -17,8 +17,7 @@ const LoginPage = () => {
   });
 
   const [forgotData, setForgotData] = useState({
-    email: '',
-    aadharNumber: ''
+    email: ''
   });
 
   const handleInputChange = (e) => {
@@ -67,8 +66,8 @@ const LoginPage = () => {
   const handleForgotPassword = async (e) => {
     e.preventDefault();
 
-    if (!forgotData.email || !forgotData.aadharNumber) {
-      toast.error('Email and Aadhar number are required');
+    if (!forgotData.email) {
+      toast.error('Email is required');
       return;
     }
 
@@ -142,17 +141,6 @@ const LoginPage = () => {
               placeholder="Email"
               value={forgotData.email}
               onChange={handleForgotChange}
-              required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
-            />
-
-            <input
-              type="text"
-              name="aadharNumber"
-              placeholder="Aadhar Number (12 digits)"
-              value={forgotData.aadharNumber}
-              onChange={handleForgotChange}
-              maxLength="12"
               required
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
             />

@@ -1,14 +1,60 @@
 import Web3 from 'web3';
 
+const DEFAULT_CHAIN_ID = 31337;
+
+const getExpectedChainId = () => {
+  const configuredChainId = Number.parseInt(process.env.REACT_APP_CHAIN_ID || '', 10);
+  return Number.isInteger(configuredChainId) && configuredChainId > 0
+    ? configuredChainId
+    : DEFAULT_CHAIN_ID;
+};
+
+const getNetworkConfig = () => {
+  const chainId = getExpectedChainId();
+
+  if (chainId === 31337 || (process.env.REACT_APP_BLOCKCHAIN_NETWORK || '').toLowerCase() === 'anvil') {
+    return {
+      rpcUrl: process.env.REACT_APP_POLYGON_RPC || 'http://127.0.0.1:8545',
+      chainName: process.env.REACT_APP_NETWORK_NAME || 'Anvil',
+      nativeCurrency: {
+        name: process.env.REACT_APP_NATIVE_CURRENCY_NAME || 'ETH',
+        symbol: process.env.REACT_APP_NATIVE_CURRENCY_SYMBOL || 'ETH',
+        decimals: 18
+      },
+      blockExplorerUrls: process.env.REACT_APP_BLOCK_EXPLORER_URLS
+        ? process.env.REACT_APP_BLOCK_EXPLORER_URLS.split(',')
+        : []
+    };
+  }
+
+  return {
+    rpcUrl: process.env.REACT_APP_POLYGON_RPC || 'https://polygon-amoy.g.alchemy.com/v2/YOUR_ALCHEMY_KEY',
+    chainName: process.env.REACT_APP_NETWORK_NAME || 'Polygon Amoy',
+    nativeCurrency: {
+      name: process.env.REACT_APP_NATIVE_CURRENCY_NAME || 'MATIC',
+      symbol: process.env.REACT_APP_NATIVE_CURRENCY_SYMBOL || 'MATIC',
+      decimals: 18
+    },
+    blockExplorerUrls: process.env.REACT_APP_BLOCK_EXPLORER_URLS
+      ? process.env.REACT_APP_BLOCK_EXPLORER_URLS.split(',')
+      : ['https://amoy.polygonscan.com/']
+  };
+};
+
 // Initialize Web3
-const RPC_URL = process.env.REACT_APP_POLYGON_RPC;
+const RPC_URL = getNetworkConfig().rpcUrl;
 const web3 = new Web3(RPC_URL);
+
+// Check wallet availability
+export const isMetaMaskAvailable = () => {
+  return typeof window !== 'undefined' && !!window.ethereum;
+};
 
 // Connect wallet
 export const connectWallet = async () => {
   try {
-    if (!window.ethereum) {
-      throw new Error('MetaMask is not installed');
+    if (!isMetaMaskAvailable()) {
+      throw new Error('MetaMask is not installed. You can still paste a wallet address manually.');
     }
 
     const accounts = await window.ethereum.request({
@@ -19,9 +65,10 @@ export const connectWallet = async () => {
       method: 'eth_chainId'
     });
 
-    // Check if connected to Polygon Mumbai testnet (chain ID: 80001)
-    const expectedChainId = parseInt(process.env.REACT_APP_CHAIN_ID);
-    if (parseInt(chainId) !== expectedChainId) {
+    const expectedChainId = getExpectedChainId();
+    const connectedChainId = Number.parseInt(chainId, 16);
+
+    if (!Number.isInteger(connectedChainId) || connectedChainId !== expectedChainId) {
       await switchNetwork(expectedChainId);
     }
 
@@ -52,18 +99,16 @@ export const switchNetwork = async (chainId) => {
 // Add Polygon Mumbai testnet to wallet
 export const addNetwork = async () => {
   try {
+    const networkConfig = getNetworkConfig();
+
     await window.ethereum.request({
       method: 'wallet_addEthereumChain',
       params: [{
-        chainId: '0x13881',
-        chainName: 'Polygon Mumbai Testnet',
-        rpcUrls: ['https://rpc-mumbai.maticvigil.com/'],
-        nativeCurrency: {
-          name: 'MATIC',
-          symbol: 'MATIC',
-          decimals: 18
-        },
-        blockExplorerUrls: ['https://mumbai.polygonscan.com/']
+        chainId: '0x' + getExpectedChainId().toString(16),
+        chainName: networkConfig.chainName,
+        rpcUrls: [networkConfig.rpcUrl],
+        nativeCurrency: networkConfig.nativeCurrency,
+        blockExplorerUrls: networkConfig.blockExplorerUrls
       }]
     });
   } catch (error) {

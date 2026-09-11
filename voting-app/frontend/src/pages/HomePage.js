@@ -5,8 +5,8 @@ import { FiBarChart2, FiCheckCircle, FiLock, FiMessageSquare, FiShield, FiUsers 
 const features = [
   {
     icon: FiShield,
-    title: 'Aadhaar OTP Verification',
-    text: 'Register with Aadhaar and confirm identity through OTP before participating.'
+    title: 'Email and Phone Verification',
+    text: 'Register, verify your email and phone number, then participate securely.'
   },
   {
     icon: FiLock,
@@ -26,7 +26,7 @@ const features = [
   {
     icon: FiUsers,
     title: 'One Person, One Account',
-    text: 'Aadhaar uniqueness checks reduce duplicate registrations.'
+    text: 'Wallet and account identity checks help reduce duplicate registrations.'
   },
   {
     icon: FiCheckCircle,
@@ -48,7 +48,7 @@ const HomePage = () => {
               VoteChain
             </h1>
             <p className="text-lg md:text-xl text-slate-200 max-w-2xl mb-8">
-              A blockchain voting platform with Aadhaar OTP verification, poll creation,
+              A blockchain voting platform with email and phone verification, poll creation,
               transparent results, and community discussion in one place.
             </p>
             <div className="flex flex-col sm:flex-row gap-3">
@@ -64,7 +64,7 @@ const HomePage = () => {
           <div className="bg-white/10 border border-white/15 rounded-xl p-5">
             <h2 className="font-bold text-xl mb-4">Workflow</h2>
             <div className="space-y-4">
-              {['Create account', 'Verify Aadhaar OTP', 'Connect wallet', 'Vote or create polls'].map((item, index) => (
+              {['Create account', 'Verify email and phone', 'Connect wallet', 'Vote or create polls'].map((item, index) => (
                 <div key={item} className="flex items-center gap-3">
                   <span className="flex h-9 w-9 items-center justify-center rounded-full bg-cyan-400 text-slate-950 font-bold">
                     {index + 1}
@@ -106,7 +106,7 @@ const HomePage = () => {
           <div>
             <p className="text-3xl font-bold text-indigo-600">01</p>
             <h3 className="font-bold mt-2 mb-1">Verify</h3>
-            <p className="text-gray-600">Confirm Aadhaar OTP before accessing protected voting actions.</p>
+            <p className="text-gray-600">Verify your email and phone before accessing protected voting actions.</p>
           </div>
           <div>
             <p className="text-3xl font-bold text-cyan-600">02</p>

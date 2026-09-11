@@ -36,14 +36,87 @@ class UserController {
   static async updateProfile(req, res) {
     try {
       const userId = req.userId;
-      const { firstName, lastName, bio, profileImage } = req.body;
+      const { firstName, lastName, email, phoneNumber, bio, profileImage, walletAddress } = req.body;
 
-      const allowedFields = { firstName, lastName, bio, profileImage };
-      
-      // Remove undefined fields
-      Object.keys(allowedFields).forEach(key => 
-        allowedFields[key] === undefined && delete allowedFields[key]
-      );
+      const currentUser = await User.findById(userId);
+
+      if (!currentUser) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      const allowedFields = { firstName, lastName, email, phoneNumber, bio, profileImage };
+
+      Object.keys(allowedFields).forEach((key) => {
+        if (allowedFields[key] === undefined) delete allowedFields[key];
+      });
+
+      if (email) {
+        const existingEmailUser = await User.findOne({ email: email.toLowerCase(), _id: { $ne: userId } });
+        if (existingEmailUser) {
+          return res.status(400).json({
+            success: false,
+            message: 'Email is already registered to another account'
+          });
+        }
+        allowedFields.email = email.toLowerCase();
+      }
+
+      if (phoneNumber) {
+        const existingPhoneUser = await User.findOne({ phoneNumber, _id: { $ne: userId } });
+        if (existingPhoneUser) {
+          return res.status(400).json({
+            success: false,
+            message: 'Phone number is already registered to another account'
+          });
+        }
+      }
+
+      if (walletAddress !== undefined) {
+        const trimmedWalletAddress = walletAddress.trim();
+
+        if (trimmedWalletAddress) {
+          const normalizedWallet = trimmedWalletAddress.toLowerCase();
+
+          if (!/^0x[a-fA-F0-9]{40}$/.test(normalizedWallet)) {
+            return res.status(400).json({
+              success: false,
+              message: 'Invalid wallet address format'
+            });
+          }
+
+          const existingWalletUser = await User.findOne({
+            walletAddress: normalizedWallet,
+            _id: { $ne: userId }
+          });
+
+          if (existingWalletUser) {
+            return res.status(400).json({
+              success: false,
+              message: 'Wallet address is already linked to another account'
+            });
+          }
+
+          const oldWallet = currentUser.walletAddress;
+
+          if (oldWallet && oldWallet !== normalizedWallet) {
+            allowedFields.walletAddressHistory = [
+              ...(currentUser.walletAddressHistory || []),
+              {
+                previousWalletAddress: oldWallet,
+                newWalletAddress: normalizedWallet,
+                changedAt: new Date()
+              }
+            ];
+            allowedFields.walletAddressChanged = true;
+          }
+
+          allowedFields.walletAddress = normalizedWallet;
+          allowedFields.walletVerified = true;
+        }
+      }
 
       const user = await User.findByIdAndUpdate(
         userId,
@@ -197,9 +270,28 @@ class UserController {
         });
       }
 
+      const userData = await User.findById(userId);
+      const normalizedWalletAddress = walletAddress.toLowerCase();
+      const updatePayload = {
+        walletAddress: normalizedWalletAddress,
+        walletVerified: true
+      };
+
+      if (userData.walletAddress && userData.walletAddress !== normalizedWalletAddress) {
+        updatePayload.walletAddressHistory = [
+          ...(userData.walletAddressHistory || []),
+          {
+            previousWalletAddress: userData.walletAddress,
+            newWalletAddress: normalizedWalletAddress,
+            changedAt: new Date()
+          }
+        ];
+        updatePayload.walletAddressChanged = true;
+      }
+
       const user = await User.findByIdAndUpdate(
         userId,
-        { walletAddress: walletAddress.toLowerCase(), walletVerified: true },
+        updatePayload,
         { new: true }
       ).select('-password -otp -otpExpiry');
 
