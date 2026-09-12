@@ -45,6 +45,11 @@ const ProfilePage = () => {
   };
 
   const handleGenerateWalletAddress = async () => {
+    if (user?.walletAddress || formData.walletAddress) {
+      toast.info('Wallet address is already generated and cannot be changed');
+      return;
+    }
+
     setGeneratingWallet(true);
     try {
       const response = await userService.generateWalletAddressForProfile();
@@ -65,7 +70,9 @@ const ProfilePage = () => {
 
     try {
       setLoading(true);
-      const response = await userService.updateProfile(formData);
+      const profileData = { ...formData };
+      delete profileData.walletAddress;
+      const response = await userService.updateProfile(profileData);
       updateUser(response.data.user);
       toast.success('Profile updated successfully');
     } catch (error) {
@@ -153,21 +160,21 @@ const ProfilePage = () => {
                 type="text"
                 name="walletAddress"
                 value={formData.walletAddress}
-                onChange={handleChange}
                 placeholder="0x..."
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
+                readOnly
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700"
               />
               <button
                 type="button"
                 onClick={handleGenerateWalletAddress}
-                disabled={generatingWallet}
+                disabled={generatingWallet || !!formData.walletAddress}
                 className="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-lg font-semibold hover:bg-indigo-200 transition disabled:opacity-50"
               >
-                {generatingWallet ? 'Generating...' : 'Generate Wallet Address'}
+                {generatingWallet ? 'Generating...' : formData.walletAddress ? 'Wallet Locked' : 'Generate Wallet Address'}
               </button>
             </div>
             <p className="text-sm text-gray-500 mt-2">
-              Changing your wallet address will be tracked in the wallet history, while existing contributions stay on record for identity tracking.
+              This local Anvil wallet is generated once and cannot be changed. All poll creation and voting transactions use this address.
             </p>
           </div>
 

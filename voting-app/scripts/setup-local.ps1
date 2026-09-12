@@ -258,12 +258,23 @@ if (-not $SkipDeploy) {
       throw "Truffle migration failed"
     }
 
-    $contractAddress = node -e "const artifact=require('./build/contracts/VotingPoll.json'); const ids=Object.keys(artifact.networks||{}); if(!ids.length){process.exit(1)}; console.log(artifact.networks[ids[ids.length-1]].address);"
+    $contractAddress = node -e "const artifact=require('./build/contracts/VotingPoll.json'); const networks=artifact.networks||{}; const deployed=networks['31337']||networks[process.env.ANVIL_CHAIN_ID||'31337']; if(!deployed?.address){process.exit(1)}; console.log(deployed.address);"
     if (-not $contractAddress) {
-      throw "Could not read deployed VotingPoll address"
+      throw "Could not read deployed VotingPoll address for Anvil network 31337"
     }
   } finally {
     Pop-Location
+  }
+
+  $codeBody = @{
+    jsonrpc = "2.0"
+    method = "eth_getCode"
+    params = @($contractAddress, "latest")
+    id = 1
+  } | ConvertTo-Json -Compress
+  $contractCode = (Invoke-RestMethod -Uri "http://127.0.0.1:8545" -Method Post -ContentType "application/json" -Body $codeBody).result
+  if (-not $contractCode -or $contractCode -eq "0x") {
+    throw "VotingPoll address $contractAddress has no bytecode on Anvil. Restart Anvil and rerun npm run setup:local."
   }
 
   Set-EnvValue (Join-Path $BackendDir ".env") "ANVIL_VOTING_CONTRACT_ADDRESS" $contractAddress

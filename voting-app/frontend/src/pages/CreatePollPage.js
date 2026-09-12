@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { pollService } from '../services';
-import { connectWallet } from '../services/walletService';
 import { useAuthStore } from '../store/authStore';
 
 const initialOptions = ['', ''];
@@ -57,24 +56,12 @@ const CreatePollPage = () => {
     }
   };
 
-  const handleConnectWallet = async () => {
-    try {
-      const walletAddress = await connectWallet();
-      setFormData((prev) => ({
-        ...prev,
-        walletAddress
-      }));
-      toast.success('Wallet connected successfully');
-    } catch (error) {
-      const message = error.message || 'Wallet connection failed';
-      toast.info(message);
-    }
-  };
-
   const handleSubmit = async (event) => {
     event.preventDefault();
 
-    if (!formData.title || !formData.description || !formData.endDate || !formData.walletAddress) {
+    const linkedWalletAddress = user?.walletAddress || formData.walletAddress;
+
+    if (!formData.title || !formData.description || !formData.endDate || !linkedWalletAddress) {
       toast.error('Please fill in all required fields');
       return;
     }
@@ -110,7 +97,7 @@ const CreatePollPage = () => {
           .map((tag) => tag.trim())
           .filter(Boolean),
         endDate: endDateValue.toISOString(),
-        walletAddress: formData.walletAddress
+        walletAddress: linkedWalletAddress
       };
 
       const response = await pollService.createPoll(payload);
@@ -192,22 +179,15 @@ const CreatePollPage = () => {
             <input
               type="text"
               name="walletAddress"
-              value={formData.walletAddress}
-              onChange={handleFieldChange}
-              placeholder="0x..."
-              className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
+              value={user?.walletAddress || formData.walletAddress}
+              readOnly
+              placeholder="Generated wallet appears after registration"
+              className="flex-1 px-4 py-3 border border-gray-300 rounded-lg bg-gray-50 text-gray-700"
               required
             />
-            <button
-              type="button"
-              onClick={handleConnectWallet}
-              className="px-4 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition"
-            >
-              Connect Wallet
-            </button>
           </div>
           <p className="text-sm text-gray-500 mt-2">
-            You can paste a wallet address manually, or connect MetaMask if it is installed.
+            Polls are signed with your one-time generated local Anvil wallet. MetaMask addresses are not used for this local chain workflow.
           </p>
         </div>
 

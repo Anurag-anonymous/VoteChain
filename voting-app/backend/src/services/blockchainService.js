@@ -18,6 +18,21 @@ class BlockchainService {
     return process.env.BLOCKCHAIN_ENABLED !== 'false';
   }
 
+  async assertContractDeployed() {
+    const contractAddress = getContractAddress();
+    const code = await provider.getCode(contractAddress);
+
+    if (!code || code === '0x') {
+      throw new Error(
+        `No VotingPoll contract is deployed at ${contractAddress} on the configured ${network} chain. ` +
+        'Run "npm run setup:local" from the project root, or redeploy with ' +
+        '"cd smart-contracts && npx truffle migrate --network anvil --reset", then restart the backend.'
+      );
+    }
+
+    return contractAddress;
+  }
+
   getSigner(walletPrivateKey) {
     return walletPrivateKey ? getSignerFromPrivateKey(walletPrivateKey) : getSigner();
   }
@@ -62,6 +77,7 @@ class BlockchainService {
 
       const signer = this.getSigner(walletPrivateKey);
       await this.fundWalletIfNeeded(await signer.getAddress());
+      await this.assertContractDeployed();
 
       const contract = this.getContract(walletPrivateKey);
       const pollCountBefore = Number(await contract.pollCount());
@@ -116,6 +132,7 @@ class BlockchainService {
 
       const signer = this.getSigner(walletPrivateKey);
       await this.fundWalletIfNeeded(await signer.getAddress());
+      await this.assertContractDeployed();
 
       const tx = await this.getContract(walletPrivateKey).vote(numericPollId, numericOptionIndex);
       const receipt = await tx.wait();
@@ -138,6 +155,7 @@ class BlockchainService {
    */
   async getPoll(pollId) {
     try {
+      await this.assertContractDeployed();
       const poll = await this.getContract().getPoll(pollId);
       return {
         success: true,
@@ -146,7 +164,7 @@ class BlockchainService {
         title: poll.title,
         options: poll.options,
         votes: poll.votes.map(v => v.toString()),
-        endTime: new Date(poll.endTime.toNumber() * 1000),
+        endTime: new Date(Number(poll.endTime) * 1000),
         active: poll.active
       };
     } catch (error) {
@@ -160,6 +178,7 @@ class BlockchainService {
    */
   async getPollResults(pollId) {
     try {
+      await this.assertContractDeployed();
       const results = await this.getContract().getPollResults(pollId);
       return {
         success: true,
@@ -176,6 +195,7 @@ class BlockchainService {
    */
   async hasVoted(pollId, walletAddress) {
     try {
+      await this.assertContractDeployed();
       const voted = await this.getContract().hasVoted(pollId, walletAddress);
       return voted;
     } catch (error) {
@@ -258,14 +278,14 @@ class BlockchainService {
     try {
       const network = await provider.getNetwork();
       const blockNumber = await provider.getBlockNumber();
-      const gasPrice = await provider.getGasPrice();
+      const feeData = await provider.getFeeData();
 
       return {
         success: true,
         chainId: network.chainId,
         name: network.name,
         blockNumber,
-        gasPrice: ethers.formatUnits(gasPrice, 'gwei')
+        gasPrice: ethers.formatUnits(feeData.gasPrice || 0n, 'gwei')
       };
     } catch (error) {
       console.error('Error getting network info:', error);
