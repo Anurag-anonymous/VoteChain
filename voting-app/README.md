@@ -2,6 +2,17 @@
 
 A secure, decentralized voting platform built with **Polygon blockchain**, **React**, **Node.js + Express**, and **MongoDB**. Features Aadhar-based verification with OTP for preventing duplicate votes and fraud.
 
+## Local Anvil Quick Start
+
+For a fresh clone, read [REQUIREMENTS.md](./REQUIREMENTS.md), install Node.js, MongoDB, and Foundry/Anvil, then run:
+
+```powershell
+npm run setup:local
+npm run dev
+```
+
+The setup script creates env files, installs dependencies, starts MongoDB and Anvil, deploys the smart contract, and writes the contract address into the backend/frontend configuration.
+
 ## Features
 
 ✅ **Aadhar-Based Registration** - Unique user identification using Aadhar Card No.  

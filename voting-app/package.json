@@ -4,6 +4,8 @@
   "description": "Blockchain-based voting platform with Aadhar verification",
   "main": "index.js",
   "scripts": {
+    "setup:local": "powershell -ExecutionPolicy Bypass -File ./scripts/setup-local.ps1",
+    "setup:local:check": "powershell -ExecutionPolicy Bypass -File ./scripts/setup-local.ps1 -NoAutoInstall -SkipInstall -SkipServices -SkipDeploy",
     "install-all": "npm install && cd backend && npm install && cd ../frontend && npm install && cd ../smart-contracts && npm install",
     "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
     "start:backend": "cd backend && npm start",

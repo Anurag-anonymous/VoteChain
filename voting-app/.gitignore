@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!**/.env.example
 
 # Dependencies
 node_modules/
@@ -11,6 +12,7 @@ build/
 dist/
 .cache/
 .next/
+.local/
 
 # OS files
 .DS_Store
@@ -27,7 +29,5 @@ npm-debug.log*
 *.swp
 *.swo
 *~
-.env.*.local
-.env.example
 
 
