@@ -15,14 +15,14 @@ The setup script creates env files, installs dependencies, starts MongoDB and An
 
 ## Features
 
-✅ **Aadhar-Based Registration** - Unique user identification using Aadhar Card No.  
-✅ **OTP Verification** - Mobile verification linked to Aadhar  
+✅ **Aadhar-Based Registration** - Unique user identification using Aadhar Card No.   (currently not implemented as Aadhaar e-KYC through an authorized KUA/Sub-KUA arrangement is not done yet.)
+✅ **OTP Verification** - Mobile verification linked to Aadhar  (development otp is used currently, will try to implement twilio or some other service for it.)
 ✅ **Secure Login System** - No duplicate users allowed  
-✅ **Blockchain Voting** - Immutable voting records on Polygon  
+✅ **Blockchain Voting** - Immutable voting records on Polygon  (shifted to anvil for local testing and gas fee headache.)
 ✅ **Poll Creation & Management** - Create and manage voting polls  
-✅ **Real-time Results** - View poll results instantly  
-✅ **Discussion Forum** - Community discussion platform  
-✅ **Password Reset via OTP** - Secure account recovery  
+✅ **Real-time Results** - View poll results instantly  (comming soon)
+✅ **Discussion Forum** - Community discussion platform  (comming soon)
+✅ **Password Reset via OTP** - Secure account recovery  (comming soon)
 
 ## Project Structure
 
@@ -262,4 +262,4 @@ And if you aren't sure about your idea or fix please kindly contact me or just g
 
 ---
 
-**Note**: This is a testnet implementation. For production, ensure proper security audits, legal compliance, and mainnet deployment procedures as we are just using it as our project so we can ignore those compliances till it gets fully ready.
+**Note**: This is a testnet implementation which is based on polygon amoy but you will find anvil local chain configuration in the code as we used the local chain for testing and initial building but it works of polygon amoy as i have tested it. For production, ensure proper security audits, legal compliance, and mainnet deployment procedures as we are just using it as our project so we can ignore those compliances till it gets fully ready.
