@@ -1,5 +1,6 @@
 const express = require('express');
 const PollController = require('../controllers/pollController');
+const ResearchProtocolController = require('../controllers/researchProtocolController');
 const { verifyToken, verifyAadhar } = require('../middleware/auth');
 
 const router = express.Router();
@@ -12,6 +13,8 @@ router.get('/:id/results', PollController.getPollResults);
 // Protected routes (require authentication and Aadhar verification)
 router.post('/', verifyToken, verifyAadhar, PollController.createPoll);
 router.post('/:pollId/vote', verifyToken, verifyAadhar, PollController.vote);
+router.post('/:pollId/ballot', verifyToken, verifyAadhar, ResearchProtocolController.castEncryptedBallot);
+router.post('/:id/finalize', verifyToken, verifyAadhar, ResearchProtocolController.finalizeTally);
 router.put('/:id/close', verifyToken, verifyAadhar, PollController.closePoll);
 router.delete('/:id', verifyToken, verifyAadhar, PollController.deletePoll);
 

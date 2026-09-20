@@ -2,7 +2,62 @@ const Poll = require('../models/Poll');
 const User = require('../models/User');
 const blockchainService = require('../services/blockchainService');
 const mongoose = require('mongoose');
+const {
+  PROTOCOL_VERSIONS,
+  getPhaseTwoProtocol,
+  isEncryptedProtocolVersion,
+  isResearchProtocolEnabled
+} = require('../protocol');
 
+const sanitizePoll = (poll) => {
+  const serialized = typeof poll.toObject === 'function' ? poll.toObject() : poll;
+  const active = serialized.status === 'active' && new Date(serialized.endDate) > new Date();
+  const tallyHidden = serialized.tallyState !== 'finalized' || active;
+
+  return {
+    ...serialized,
+    encryptedBallots: undefined,
+    uniqueVoters: undefined,
+    options: (serialized.options || []).map((option) => ({
+      ...option,
+      voters: undefined,
+      votes: tallyHidden ? null : option.votes,
+      hidden: tallyHidden
+    })),
+    publicBallotCount: serialized.encryptedBallots?.length || serialized.totalVotes || 0,
+    totalVotes: tallyHidden ? serialized.encryptedBallots?.length || serialized.totalVotes || 0 : serialized.totalVotes,
+    tallyHidden
+  };
+};
+
+const buildMockCredential = (protocol, userId, electionId) => {
+  const voterId = userId.toString();
+
+  try {
+    protocol.eligibilityAuthority.registerVoter({
+      voterId,
+      identityRef: `synthetic:${voterId}`,
+      electionId
+    });
+  } catch (error) {
+    if (!error.message.includes('already')) {
+      // The in-memory authority may be reset between requests. Existing records
+      // are harmless in this mock C0 boundary, so only unexpected errors bubble.
+    }
+  }
+
+  protocol.eligibilityAuthority.verifyEligibility({
+    voterId,
+    electionId,
+    eligible: true
+  });
+
+  return protocol.eligibilityAuthority.issueCredential({
+    voterId,
+    electionId,
+    credentialProvider: protocol.credentialProvider
+  });
+};
 class PollController {
   /**
    * Get all polls
@@ -26,7 +81,7 @@ class PollController {
 
       res.status(200).json({
         success: true,
-        polls,
+        polls: polls.map(sanitizePoll),
         pagination: {
           total,
           pages: Math.ceil(total / limit),
@@ -71,7 +126,7 @@ class PollController {
 
       res.status(200).json({
         success: true,
-        poll
+        poll: sanitizePoll(poll)
       });
     } catch (error) {
       res.status(500).json({
@@ -86,7 +141,37 @@ class PollController {
    */
   static async createPoll(req, res) {
     try {
-      const { title, description, options, endDate, category, tags, walletAddress } = req.body;
+      const {
+        title,
+        description,
+        options,
+        endDate,
+        category,
+        tags,
+        walletAddress,
+        protocolVersion
+      } = req.body;
+
+      const allowedProtocolVersions = Object.values(PROTOCOL_VERSIONS);
+      const requestedProtocolVersion = protocolVersion ||
+        (isResearchProtocolEnabled()
+          ? PROTOCOL_VERSIONS.C0_MOCK_ENCRYPTED
+          : PROTOCOL_VERSIONS.LEGACY_PLAINTEXT);
+
+      if (!allowedProtocolVersions.includes(requestedProtocolVersion)) {
+        return res.status(400).json({
+          success: false,
+          message: `protocolVersion must be one of: ${allowedProtocolVersions.join(', ')}`
+        });
+      }
+
+      if (isEncryptedProtocolVersion(requestedProtocolVersion) && !isResearchProtocolEnabled()) {
+        return res.status(400).json({
+          success: false,
+          message: 'The c0-mock-encrypted research protocol is disabled. Set RESEARCH_PROTOCOL_ENABLED=true to enable it.'
+        });
+      }
+
       const userId = req.userId;
       const currentUser = await User.findById(userId).select('+walletPrivateKey');
       const shouldUseBlockchain = process.env.BLOCKCHAIN_ENABLED !== 'false';
@@ -144,16 +229,21 @@ class PollController {
         });
       }
 
+      const generatedPollId = new mongoose.Types.ObjectId();
+      const electionId = generatedPollId.toString();
+
       // Create poll options array
       const pollOptions = options.map(option => ({
         _id: new mongoose.Types.ObjectId(),
         optionText: option,
+        optionCommitment: Poll.createOptionCommitment(electionId, option),
         votes: 0,
         voters: []
       }));
 
       // Create poll
       const poll = new Poll({
+        _id: generatedPollId,
         title,
         description,
         options: pollOptions,
@@ -161,7 +251,10 @@ class PollController {
         creatorWallet: effectiveWalletAddress,
         endDate: endDateTime,
         category: category || 'other',
-        tags: tags || []
+        tags: tags || [],
+        protocolVersion: requestedProtocolVersion,
+        anonymous: isEncryptedProtocolVersion(requestedProtocolVersion),
+        tallyState: 'hidden'
       });
 
       if (shouldPersistToDatabase) {
@@ -204,7 +297,7 @@ class PollController {
         message: shouldUseBlockchain
           ? 'Poll created successfully'
           : 'Poll created successfully in database-only mode',
-        poll,
+        poll: sanitizePoll(poll),
         blockchainEnabled: shouldUseBlockchain,
         databaseEnabled: shouldPersistToDatabase
       });
@@ -288,6 +381,13 @@ class PollController {
         });
       }
 
+      if (poll.usesEncryptedProtocol()) {
+        return res.status(400).json({
+          success: false,
+          message: 'This poll uses the c0-mock-encrypted protocol. Submit a ballot to POST /api/polls/:pollId/ballot instead.'
+        });
+      }
+
       // Check if user already voted
       if (poll.hasUserVoted(userId) && !poll.allowMultipleVotes) {
         return res.status(400).json({
@@ -349,6 +449,105 @@ class PollController {
   }
 
   /**
+   * Submit a Phase 3 C0 mock encrypted ballot.
+   */
+  static async submitBallot(req, res) {
+    try {
+      const { pollId } = req.params;
+      const { optionId } = req.body;
+      const userId = req.userId;
+
+      if (!mongoose.Types.ObjectId.isValid(pollId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid poll ID'
+        });
+      }
+
+      if (!mongoose.Types.ObjectId.isValid(optionId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid option ID'
+        });
+      }
+
+      const poll = await Poll.findById(pollId).select('+encryptedBallots.tallyHintOptionId');
+
+      if (!poll) {
+        return res.status(404).json({
+          success: false,
+          message: 'Poll not found'
+        });
+      }
+
+      if (!poll.usesEncryptedProtocol()) {
+        return res.status(400).json({
+          success: false,
+          message: 'This poll uses the legacy plaintext vote endpoint.'
+        });
+      }
+
+      if (!poll.isActive()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Poll is closed'
+        });
+      }
+
+      const option = poll.options.id(optionId);
+      if (!option) {
+        return res.status(404).json({
+          success: false,
+          message: 'Option not found'
+        });
+      }
+
+      const protocol = getPhaseTwoProtocol();
+      const electionId = poll._id.toString();
+      const credential = buildMockCredential(protocol, userId, electionId);
+      const eligibilityProof = protocol.credentialProvider.proveEligibility({
+        credential,
+        electionId
+      });
+
+      const ballot = protocol.ballotService.createEncryptedBallot({
+        electionId,
+        candidateId: option.optionCommitment,
+        eligibilityProof
+      });
+
+      if (!protocol.ballotService.verifyBallot({ ballot, credentialProvider: protocol.credentialProvider })) {
+        return res.status(400).json({
+          success: false,
+          message: 'Ballot proof verification failed'
+        });
+      }
+
+      await poll.addEncryptedBallot(optionId, ballot, `C0_MOCK_BALLOT:${ballot.ballotId}`);
+      await User.findByIdAndUpdate(userId, { $inc: { votesCount: 1 } });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Encrypted ballot accepted. Candidate tally remains hidden until finalization.',
+        receipt: {
+          ballotId: ballot.ballotId,
+          electionId,
+          nullifier: eligibilityProof.nullifier,
+          transactionHash: `C0_MOCK_BALLOT:${ballot.ballotId}`
+        },
+        publicBallotCount: poll.encryptedBallots.length,
+        tallyHidden: true
+      });
+    } catch (error) {
+      const status = error.message.includes('already submitted') ? 400 : 500;
+      return res.status(status).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  /**
    * Get poll results
    */
   static async getPollResults(req, res) {
@@ -378,6 +577,8 @@ class PollController {
           title: poll.title,
           totalVotes: poll.totalVotes,
           totalParticipants: poll.totalParticipants,
+          protocolVersion: poll.protocolVersion,
+          tallyState: poll.tallyState,
           options: poll.getResults()
         }
       });

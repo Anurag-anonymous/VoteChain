@@ -19749,8 +19749,8 @@
     "31337": {
       "events": {},
       "links": {},
-      "address": "0x2612Af3A521c2df9EAF28422Ca335b04AdF3ac66",
-      "transactionHash": "0x8b877c1d2f90bf9fd269f00161b30f6e493c9c16ff872ab5ac183a3f081ea9e3"
+      "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      "transactionHash": "0xa2fe86a8e986922c132526cbb2d32b7bbbe3354059e969e7d60a3733c4569715"
     },
     "80002": {
       "events": {},
@@ -19760,7 +19760,7 @@
     }
   },
   "schemaVersion": "3.4.16",
-  "updatedAt": "2026-09-12T02:32:43.968Z",
+  "updatedAt": "2026-09-20T11:55:47.736Z",
   "networkType": "ethereum",
   "devdoc": {
     "details": "Secure voting contract for blockchain-based polls Deployed on Polygon Mumbai Testnet",

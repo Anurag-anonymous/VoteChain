@@ -40,13 +40,23 @@ MONGODB_ATLAS_URI=mongodb+srv://username:password@cluster.mongodb.net/voting-app
 # MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/voting-app
 
 JWT_SECRET=your_super_secret_key_here
-POLYGON_RPC_URL=https://rpc-mumbai.maticvigil.com
-POLYGON_CHAIN_ID=80001
-POLYGON_WALLET_PRIVATE_KEY=your_wallet_private_key
+BLOCKCHAIN_NETWORK=anvil
+ANVIL_RPC_URL=http://127.0.0.1:8545
+ANVIL_CHAIN_ID=31337
+ANVIL_VOTING_CONTRACT_ADDRESS=0x...
+PRIVATE_KEY=your_wallet_private_key
 AADHAR_API_KEY=your_aadhar_api_key
 SMTP_USER=your_email@gmail.com
 SMTP_PASS=your_app_password
+# Phase 2 research protocol (mock cryptography, research boundary only)
+RESEARCH_PROTOCOL_ENABLED=true
+RESEARCH_TALLY_THRESHOLD=1
 ```
+
+For Polygon Amoy instead of the local chain, set
+`BLOCKCHAIN_NETWORK=polygon-amoy`, `POLYGON_RPC_URL=<amoy rpc>`,
+`POLYGON_CHAIN_ID=80002` and `POLYGON_WALLET_PRIVATE_KEY=...`. Mumbai (80001) is
+retired.
 
 #### Frontend Setup (.env.local)
 
@@ -57,9 +67,10 @@ cp .env.example .env.local
 
 Edit `frontend/.env.local` with:
 ```env
-REACT_APP_API_URL=http://localhost:5000
-REACT_APP_POLYGON_RPC=https://rpc-mumbai.maticvigil.com
-REACT_APP_CHAIN_ID=80001
+REACT_APP_API_URL=http://localhost:5000/api
+REACT_APP_POLYGON_RPC=http://127.0.0.1:8545
+REACT_APP_CHAIN_ID=31337
+REACT_APP_NETWORK_NAME=Local Anvil
 ```
 
 ### 3. Setup Database
@@ -104,13 +115,21 @@ export PRIVATE_KEY=your_wallet_private_key
 # Compile contracts
 npm run compile
 
-# Deploy to Mumbai Testnet
-npm run migrate -- --network mumbai
+# Deploy to the local Anvil chain
+npm run migrate -- --network anvil --reset
+
+# Deploy to Polygon Amoy
+npm run migrate -- --network amoy
 
 # Copy the deployed contract address and update:
-# - backend/.env: VOTING_CONTRACT_ADDRESS
+# - backend/.env: ANVIL_VOTING_CONTRACT_ADDRESS (or POLYGON_VOTING_CONTRACT_ADDRESS on Amoy)
 # - frontend/.env.local: REACT_APP_CONTRACT_ADDRESS
+# npm run setup:local does this automatically for Anvil.
 ```
+
+`npm run setup:local` from the project root is the recommended path: it starts
+MongoDB and Anvil, deploys `VotingPoll.sol`, and writes the address into both env
+files.
 
 ### 5. Start Development
 
@@ -147,8 +166,10 @@ npm run dev
 1. Login to account
 2. Click on profile
 3. Link your MetaMask wallet
-4. Ensure you're on **Polygon Mumbai Testnet**
-5. Get test MATIC from [Polygon Faucet](https://faucet.polygon.technology/)
+4. Ensure you're on the **Local Anvil** network (Chain ID: 31337)
+5. Local Anvil accounts already hold test ETH; for Polygon testnet switch to
+   **Amoy** (Chain ID: 80002) and get test POLYM from
+   [Polygon Faucet](https://faucet.polygon.technology/)
 
 ### 3. Create a Poll
 1. Go to **Create Poll**
@@ -200,10 +221,13 @@ MONGODB_URI=mongodb://localhost:27017/voting-app
 
 ### MetaMask Network Issues
 1. MetaMask settings → Add Network
-2. Network name: Polygon Mumbai
-3. RPC URL: https://rpc-mumbai.maticvigil.com
-4. Chain ID: 80001
-5. Currency: MATIC
+2. Network name: Local Anvil
+3. RPC URL: http://127.0.0.1:8545
+4. Chain ID: 31337
+5. Currency: ETH
+
+For Polygon testnet: network name `Polygon Amoy`, RPC from `POLYGON_RPC_URL`,
+Chain ID `80002`, currency `POLYM`.
 
 ### Contract Deployment Failed
 ```bash

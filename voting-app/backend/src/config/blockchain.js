@@ -26,16 +26,30 @@ const getNetworkConfig = () => {
 
 const networkConfig = getNetworkConfig();
 const rpcUrl = networkConfig.rpcUrl;
-const privateKey = process.env.POLYGON_WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
+const network = (process.env.BLOCKCHAIN_NETWORK || 'amoy').toLowerCase();
+const privateKey = ['anvil', 'local'].includes(network)
+  ? (process.env.PRIVATE_KEY || process.env.ANVIL_PRIVATE_KEY || process.env.POLYGON_WALLET_PRIVATE_KEY)
+  : (process.env.POLYGON_WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY);
 const contractAddress = networkConfig.contractAddress;
 
 // Initialize providers without requiring wallet credentials at app startup.
+// Supplying the expected network prevents ethers from repeatedly probing an
+// offline local RPC node just to discover the chain ID.
 const web3 = new Web3(rpcUrl);
-const provider = new ethers.JsonRpcProvider(rpcUrl);
+const provider = new ethers.JsonRpcProvider(
+  rpcUrl,
+  {
+    chainId: networkConfig.chainId,
+    name: networkConfig.networkName
+  },
+  {
+    staticNetwork: true
+  }
+);
 
 const getSigner = () => {
   if (!privateKey) {
-    throw new Error('Missing POLYGON_WALLET_PRIVATE_KEY or PRIVATE_KEY environment variable');
+    throw new Error('Missing PRIVATE_KEY or POLYGON_WALLET_PRIVATE_KEY environment variable');
   }
 
   try {
@@ -88,5 +102,5 @@ module.exports = {
   chainId: networkConfig.chainId,
   rpcUrl,
   networkName: networkConfig.networkName,
-  network: (process.env.BLOCKCHAIN_NETWORK || 'amoy').toLowerCase()
+  network
 };

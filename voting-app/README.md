@@ -106,28 +106,51 @@ MONGODB_ATLAS_URI=mongodb+srv://username:password@cluster.mongodb.net/voting-app
 JWT_SECRET=your_jwt_secret_key
 AADHAR_API_KEY=your_aadhar_api_key
 AADHAR_API_URL=https://aadhar-api-url
-POLYGON_RPC_URL=https://rpc-mumbai.maticvigil.com
-POLYGON_CHAIN_ID=80001
+BLOCKCHAIN_NETWORK=anvil
+ANVIL_RPC_URL=http://127.0.0.1:8545
+ANVIL_CHAIN_ID=31337
+ANVIL_VOTING_CONTRACT_ADDRESS=0x...
 PRIVATE_KEY=your_wallet_private_key
 OTP_EXPIRE_TIME=10
 SMTP_USER=your_email@gmail.com
 SMTP_PASS=your_app_password
 ```
 
+For Polygon testnet instead of the local chain, set
+`BLOCKCHAIN_NETWORK=polygon-amoy`, `POLYGON_RPC_URL=<amoy rpc>`, and
+`POLYGON_CHAIN_ID=80002`. Amoy is chain ID 80002; Mumbai (80001) is retired.
+
+Phase 2 research protocol controls (mock cryptography, research boundary only):
+
+```env
+RESEARCH_PROTOCOL_ENABLED=true
+RESEARCH_TALLY_THRESHOLD=1
+BLOCKCHAIN_ENABLED=true
+DATABASE_ENABLED=true
+```
+
+`RESEARCH_PROTOCOL_ENABLED=false` disables the `c0-mock-encrypted` poll type and
+its ballot and finalize endpoints. See
+[docs/CRYPTOGRAPHIC_ARCHITECTURE.md](./docs/CRYPTOGRAPHIC_ARCHITECTURE.md).
+
 **frontend/.env.local**
 ```
-REACT_APP_API_URL=http://localhost:5000
-REACT_APP_POLYGON_RPC=https://rpc-mumbai.maticvigil.com
+REACT_APP_API_URL=http://localhost:5000/api
+REACT_APP_POLYGON_RPC=http://127.0.0.1:8545
 REACT_APP_CONTRACT_ADDRESS=0x...
-REACT_APP_CHAIN_ID=80001
+REACT_APP_CHAIN_ID=31337
+REACT_APP_NETWORK_NAME=Local Anvil
 ```
 
 ### 3. Deploy Smart Contracts
 
 ```bash
 cd smart-contracts
-truffle migrate --network mumbai
+npx truffle migrate --network anvil --reset
 ```
+
+For Polygon Amoy use `--network amoy` after setting `POLYGON_RPC_URL` and
+`PRIVATE_KEY` in `smart-contracts/.env`.
 
 ### 4. Start Backend
 
@@ -227,8 +250,18 @@ truffle test
 
 **MetaMask Connection Issues**
 - Ensure MetaMask is installed
-- Switch to Mumbai Testnet (Chain ID: 80001)
-- Ensure you have test MATIC tokens
+- Add the local chain: RPC `http://127.0.0.1:8545`, Chain ID `31337`,
+  Currency `ETH`, name `Local Anvil`
+- Anvil accounts already hold test ETH; no faucet is needed
+- For Polygon testnet, switch to Amoy (Chain ID: 80002) and get test POLYM
+  from the Polygon faucet
+
+**Encrypted Research Polls Return 400**
+- `c0-mock-encrypted` polls require `RESEARCH_PROTOCOL_ENABLED=true` in
+  `backend/.env`
+- Cast ballots with `POST /api/polls/:pollId/ballot` and finalize with
+  `POST /api/polls/:id/finalize`; `POST /api/polls/:pollId/vote` is for legacy
+  plaintext polls only
 
 **OTP Not Received**
 - Check email/SMS service configuration
@@ -236,9 +269,9 @@ truffle test
 - Check OTP expiration time
 
 **Transaction Failures**
-- Verify sufficient test MATIC balance
-- Check gas price settings
-- Ensure contract address is correct
+- Confirm Anvil (or Amoy) is reachable at the configured RPC URL
+- Check the account balance and gas price settings
+- Ensure the contract address in `.env` matches the deployed contract
 
 ## Future Enhancements
 

@@ -1,0 +1,10 @@
+{
+  "contractName": "ElectionManager",
+  "network": "anvil",
+  "chainId": 31337,
+  "address": null,
+  "deploymentTransactionHash": null,
+  "blockNumber": null,
+  "abiVersion": "phase-2-placeholder",
+  "notes": "Deployment manifest placeholder for the modular research architecture."
+}

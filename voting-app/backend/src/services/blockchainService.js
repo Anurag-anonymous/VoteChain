@@ -1,4 +1,4 @@
-const { provider, getSigner, getSignerFromPrivateKey, getContractAddress, network } = require('../config/blockchain');
+const { provider, getSigner, getSignerFromPrivateKey, getContractAddress, network, rpcUrl } = require('../config/blockchain');
 const ethers = require('ethers');
 
 // ABI for the Voting contract (simplified)
@@ -18,7 +18,24 @@ class BlockchainService {
     return process.env.BLOCKCHAIN_ENABLED !== 'false';
   }
 
+  async assertRpcAvailable() {
+    try {
+      await provider.getBlockNumber();
+    } catch (error) {
+      if (error.code === 'ECONNREFUSED' || error.message.includes('ECONNREFUSED')) {
+        throw new Error(
+          `Blockchain RPC is not running at ${rpcUrl}. ` +
+          'Start Anvil with "anvil --host 127.0.0.1 --port 8545 --chain-id 31337" ' +
+          'or run "npm run setup:local" from the project root.'
+        );
+      }
+
+      throw error;
+    }
+  }
+
   async assertContractDeployed() {
+    await this.assertRpcAvailable();
     const contractAddress = getContractAddress();
     const code = await provider.getCode(contractAddress);
 
@@ -76,6 +93,7 @@ class BlockchainService {
       }
 
       const signer = this.getSigner(walletPrivateKey);
+      await this.assertRpcAvailable();
       await this.fundWalletIfNeeded(await signer.getAddress());
       await this.assertContractDeployed();
 
@@ -131,6 +149,7 @@ class BlockchainService {
       }
 
       const signer = this.getSigner(walletPrivateKey);
+      await this.assertRpcAvailable();
       await this.fundWalletIfNeeded(await signer.getAddress());
       await this.assertContractDeployed();
 

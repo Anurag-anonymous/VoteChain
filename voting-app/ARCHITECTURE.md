@@ -1,5 +1,15 @@
 # Voting Platform Architecture
 
+> Documentation map: this file describes the prototype application only. The
+> `docs/` set is authoritative for the Phase 2 research program:
+> [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md),
+> [docs/CRYPTOGRAPHIC_ARCHITECTURE.md](./docs/CRYPTOGRAPHIC_ARCHITECTURE.md),
+> [docs/THREAT_MODEL.md](./docs/THREAT_MODEL.md),
+> [docs/SECURITY_ASSUMPTIONS.md](./docs/SECURITY_ASSUMPTIONS.md),
+> [docs/NETWORK_COMPATIBILITY.md](./docs/NETWORK_COMPATIBILITY.md),
+> [docs/EXPERIMENT_PROTOCOL.md](./docs/EXPERIMENT_PROTOCOL.md), and
+> [docs/ARCHITECTURE_AUDIT.md](./docs/ARCHITECTURE_AUDIT.md).
+
 ## System Overview
 
 ```
@@ -52,9 +62,12 @@
   - Votes
 
 ### Blockchain Layer
-- **Network**: Polygon Mumbai Testnet
+- **Networks**: Anvil `31337` (local) and Polygon Amoy `80002` (testnet);
+  Mumbai `80001` is retired. The registry lives in
+  `backend/src/config/networks.js` and `docs/NETWORK_COMPATIBILITY.md` is
+  authoritative for network values.
 - **Language**: Solidity
-- **Framework**: Truffle
+- **Framework**: Truffle (solc 0.8.20)
 - **Contracts**:
   - VotingPoll (main contract)
 
@@ -173,8 +186,14 @@ User → Create Discussion → Backend API
 - `GET /api/polls` - Get all polls
 - `POST /api/polls` - Create poll
 - `GET /api/polls/:id` - Get poll details
-- `POST /api/polls/:id/vote` - Cast vote
+- `POST /api/polls/:id/vote` - Cast vote (legacy plaintext flow)
 - `GET /api/polls/:id/results` - Get results
+
+### Polls (Phase 2 research protocol)
+These endpoints only apply to polls created with
+`protocolVersion: "c0-mock-encrypted"`. See `docs/CRYPTOGRAPHIC_ARCHITECTURE.md`.
+- `POST /api/polls/:pollId/ballot` - Submit a mock encrypted ballot
+- `POST /api/polls/:id/finalize` - Finalize the mock tally (creator only)
 
 ### Discussions
 - `GET /api/discussions` - Get all discussions

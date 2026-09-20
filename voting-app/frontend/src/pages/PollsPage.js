@@ -62,19 +62,26 @@ const PollsPage = () => {
       return;
     }
 
-    if (!user?.walletAddress) {
+    const poll = polls.find((item) => item._id === pollId);
+    const usesEncryptedProtocol = poll?.protocolVersion === 'c0-mock-encrypted';
+
+    if (!usesEncryptedProtocol && !user?.walletAddress) {
       toast.error('Please link your wallet before voting');
       return;
     }
 
     try {
       setVotingPollId(pollId);
-      await pollService.vote(pollId, {
-        optionId,
-        walletAddress: user.walletAddress
-      });
+      if (usesEncryptedProtocol) {
+        await pollService.submitBallot(pollId, { optionId });
+      } else {
+        await pollService.vote(pollId, {
+          optionId,
+          walletAddress: user.walletAddress
+        });
+      }
 
-      toast.success('Vote recorded successfully');
+      toast.success(usesEncryptedProtocol ? 'Encrypted ballot accepted' : 'Vote recorded successfully');
       await loadPolls();
     } catch (error) {
       toast.error(error.response?.data?.message || error.message || 'Unable to vote right now');
@@ -153,7 +160,7 @@ const PollsPage = () => {
                 <p className="text-gray-600 mb-4">{poll.description}</p>
 
                 <div className="flex items-center justify-between text-sm text-gray-500 mb-4">
-                  <span>{poll.totalVotes || 0} votes</span>
+                  <span>{poll.publicBallotCount || poll.totalVotes || 0} ballots accepted</span>
                   <span>Ends {formatDate(poll.endDate)}</span>
                 </div>
 
@@ -171,13 +178,17 @@ const PollsPage = () => {
                       }`}
                     >
                       <span className="text-left text-sm font-medium text-gray-700">{option.optionText}</span>
-                      <span className="text-xs font-semibold text-gray-500">{option.votes || 0}</span>
+                      <span className="text-xs font-semibold text-gray-500">
+                        {option.hidden ? 'Hidden' : option.votes || 0}
+                      </span>
                     </button>
                   ))}
                 </div>
 
                 <div className="flex items-center justify-between border-t border-gray-200 pt-4">
-                  <span className="text-xs text-gray-500">{poll.totalParticipants || 0} participants</span>
+                  <span className="text-xs text-gray-500">
+                    {poll.tallyHidden ? 'Tally hidden until close' : `${poll.totalParticipants || 0} participants`}
+                  </span>
                   <Link
                     to={`/polls/${poll._id}`}
                     className="text-sm font-semibold text-indigo-600 hover:text-indigo-700"

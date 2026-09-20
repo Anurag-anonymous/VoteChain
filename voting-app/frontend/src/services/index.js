@@ -19,6 +19,8 @@ const pollService = {
   getPollResults: (id) => api.get(`/polls/${id}/results`),
   createPoll: (data) => api.post('/polls', data),
   vote: (pollId, data) => api.post(`/polls/${pollId}/vote`, data),
+  submitBallot: (pollId, data) => api.post(`/polls/${pollId}/ballot`, data),
+  finalizeTally: (id) => api.post(`/polls/${id}/finalize`),
   closePoll: (id) => api.put(`/polls/${id}/close`),
   deletePoll: (id) => api.delete(`/polls/${id}`)
 };
