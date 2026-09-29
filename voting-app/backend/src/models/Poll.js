@@ -5,6 +5,39 @@ const {
   isEncryptedProtocolVersion
 } = require('../protocol');
 
+const paddingConfigSchema = new mongoose.Schema({
+  paddingRatePercent: Number,
+  selectionStrategy: {
+    type: String,
+    enum: ['population-sample', 'per-ballot']
+  },
+  timingDistribution: {
+    type: String,
+    enum: ['immediate', 'fixed', 'uniform', 'exponential']
+  },
+  timingWindowSeconds: Number,
+  dummyTransactionsPerBallot: Number,
+  electionPopulation: Number
+}, { _id: false });
+
+const paddingParticipantSchema = new mongoose.Schema({
+  voterRef: String,
+  selected: Boolean
+}, { _id: false });
+
+const paddingLedgerEntrySchema = new mongoose.Schema({
+  transactionHash: String,
+  blockNumber: Number,
+  timestamp: Date,
+  gasUsed: String,
+  calldataBytes: Number,
+  submitter: String,
+  label: {
+    type: String,
+    enum: ['genuine', 'panic', 'revote', 'padding']
+  },
+}, { _id: false });
+
 const pollSchema = new mongoose.Schema({
   title: {
     type: String,
@@ -95,8 +128,26 @@ const pollSchema = new mongoose.Schema({
 
   protocolVersion: {
     type: String,
-    enum: [PROTOCOL_VERSIONS.LEGACY_PLAINTEXT, PROTOCOL_VERSIONS.C0_MOCK_ENCRYPTED],
-    default: PROTOCOL_VERSIONS.LEGACY_PLAINTEXT
+    enum: Object.values(PROTOCOL_VERSIONS),
+    default: PROTOCOL_VERSIONS.C0_ENCRYPTED
+  },
+  paddingConfig: {
+    type: paddingConfigSchema,
+    select: false
+  },
+  paddingParticipants: {
+    type: [paddingParticipantSchema],
+    default: [],
+    select: false
+  },
+  paddingParticipantSalt: {
+    type: String,
+    select: false
+  },
+  paddingLedger: {
+    type: [paddingLedgerEntrySchema],
+    default: [],
+    select: false
   },
   tallyState: {
     type: String,
@@ -115,13 +166,29 @@ const pollSchema = new mongoose.Schema({
     proof: mongoose.Schema.Types.Mixed,
     eligibilityProof: mongoose.Schema.Types.Mixed,
     transactionHash: String,
+    receiptAnchored: {
+      type: Boolean,
+      default: false
+    },
+    receiptFrom: String,
+    receiptTo: String,
+    receiptBlockNumber: Number,
+    receiptTimestamp: Date,
+    receiptGasUsed: String,
+    receiptCalldataBytes: Number,
+    receiptHashes: mongoose.Schema.Types.Mixed,
+    superseded: {
+      type: Boolean,
+      default: false
+    },
+    supersededAt: Date,
+    replacementBallotId: String,
     acceptedAt: {
       type: Date,
       default: Date.now
     },
     tallyHintOptionId: {
-      type: mongoose.Schema.Types.ObjectId,
-      select: false
+      type: mongoose.Schema.Types.ObjectId
     }
   }],
   finalizedResults: [{
@@ -130,6 +197,10 @@ const pollSchema = new mongoose.Schema({
     votes: Number,
     percentage: Number
   }],
+  excludedPanicBallotCount: {
+    type: Number,
+    default: 0
+  },
 
   // Blockchain
   blockchainPollId: {
@@ -214,7 +285,7 @@ pollSchema.methods.addVote = async function(userId, walletAddress, optionId, tra
   return await this.save();
 };
 
-pollSchema.methods.addEncryptedBallot = async function(optionId, ballot, transactionHash) {
+pollSchema.methods.addEncryptedBallot = async function(optionId, ballot, receipt = {}, options = {}) {
   if (!ballot || !ballot.eligibilityProof || !ballot.eligibilityProof.nullifier) {
     throw new Error('A ballot with an eligibility proof and nullifier is required');
   }
@@ -224,8 +295,22 @@ pollSchema.methods.addEncryptedBallot = async function(optionId, ballot, transac
     throw new Error('Option not found');
   }
 
-  if (this.hasNullifierVoted(ballot.eligibilityProof.nullifier) && !this.allowMultipleVotes) {
+  const existingActiveBallot = this.encryptedBallots.find((existingBallot) => (
+    existingBallot.nullifier === ballot.eligibilityProof.nullifier && !existingBallot.superseded
+  ));
+
+  if (existingActiveBallot && !options.allowReplacement) {
     throw new Error('Credential has already submitted a ballot in this poll');
+  }
+
+  const receiptMetadata = typeof receipt === 'string'
+    ? { transactionHash: receipt }
+    : receipt;
+
+  if (existingActiveBallot && options.allowReplacement) {
+    existingActiveBallot.superseded = true;
+    existingActiveBallot.supersededAt = new Date();
+    existingActiveBallot.replacementBallotId = ballot.ballotId;
   }
 
   this.encryptedBallots.push({
@@ -236,13 +321,23 @@ pollSchema.methods.addEncryptedBallot = async function(optionId, ballot, transac
     randomnessCommitment: ballot.randomnessCommitment,
     proof: ballot.proof,
     eligibilityProof: ballot.eligibilityProof,
-    transactionHash,
+    transactionHash: receiptMetadata.transactionHash || null,
+    receiptAnchored: Boolean(receiptMetadata.enabled && receiptMetadata.transactionHash),
+    receiptFrom: receiptMetadata.from || null,
+    receiptTo: receiptMetadata.to || null,
+    receiptBlockNumber: receiptMetadata.blockNumber || null,
+    receiptTimestamp: receiptMetadata.timestamp || null,
+    receiptGasUsed: receiptMetadata.gasUsed || null,
+    receiptCalldataBytes: receiptMetadata.calldataBytes || null,
+    receiptHashes: receiptMetadata.hashes || null,
     acceptedAt: new Date(),
     tallyHintOptionId: option._id
   });
 
-  this.totalVotes = this.encryptedBallots.length;
-  this.totalParticipants = this.encryptedBallots.length;
+  const activeBallots = this.encryptedBallots.filter((acceptedBallot) => !acceptedBallot.superseded);
+  const uniqueNullifiers = new Set(activeBallots.map((acceptedBallot) => acceptedBallot.nullifier));
+  this.totalVotes = activeBallots.length;
+  this.totalParticipants = uniqueNullifiers.size;
 
   return await this.save();
 };
@@ -253,11 +348,7 @@ pollSchema.methods.hasUserVoted = function(userId) {
 };
 
 pollSchema.methods.hasNullifierVoted = function(nullifier) {
-  return this.encryptedBallots.some((ballot) => ballot.nullifier === nullifier);
-};
-
-pollSchema.methods.usesEncryptedProtocol = function() {
-  return this.protocolVersion === 'c0-mock-encrypted';
+  return this.encryptedBallots.some((ballot) => ballot.nullifier === nullifier && !ballot.superseded);
 };
 
 pollSchema.methods.usesEncryptedProtocol = function() {
@@ -288,22 +379,28 @@ pollSchema.methods.getResults = function() {
   }));
 };
 
-pollSchema.methods.finalizeMockTally = async function() {
+pollSchema.methods.finalizeEncryptedTally = async function({ panicCredentialCommitments = [] } = {}) {
   if (!this.usesEncryptedProtocol()) {
-    throw new Error('Mock tally finalization is only available for the c0-mock-encrypted protocol');
+    throw new Error('Tally finalization is only available for encrypted C0 polls');
   }
 
+  const panicSet = new Set((panicCredentialCommitments || []).filter(Boolean));
+  const activeBallots = this.encryptedBallots.filter((ballot) => !ballot.superseded && !(
+    ballot.eligibilityProof &&
+    ballot.eligibilityProof.credentialCommitment &&
+    panicSet.has(ballot.eligibilityProof.credentialCommitment)
+  ));
   const counts = new Map(this.options.map((option) => [option._id.toString(), 0]));
 
-  this.encryptedBallots.forEach((ballot) => {
+  activeBallots.forEach((ballot) => {
     const optionId = ballot.tallyHintOptionId ? ballot.tallyHintOptionId.toString() : null;
     if (optionId && counts.has(optionId)) {
       counts.set(optionId, counts.get(optionId) + 1);
     }
   });
 
-  this.totalVotes = this.encryptedBallots.length;
-  this.totalParticipants = this.encryptedBallots.length;
+  this.totalVotes = activeBallots.length;
+  this.totalParticipants = new Set(activeBallots.map((ballot) => ballot.nullifier)).size;
   this.finalizedResults = this.options.map((option) => {
     const votes = counts.get(option._id.toString()) || 0;
     return {
@@ -313,10 +410,18 @@ pollSchema.methods.finalizeMockTally = async function() {
       percentage: this.totalVotes > 0 ? Number(((votes / this.totalVotes) * 100).toFixed(2)) : 0
     };
   });
+  this.excludedPanicBallotCount = this.encryptedBallots.filter((ballot) => (
+    !ballot.superseded &&
+    ballot.eligibilityProof?.credentialCommitment &&
+    panicSet.has(ballot.eligibilityProof.credentialCommitment)
+  )).length;
   this.tallyState = 'finalized';
   this.status = 'closed';
 
-  return await this.save();
+  if (this.constructor && this.constructor.db && this.constructor.db.readyState === 1) {
+    return this.save();
+  }
+  return this;
 };
 
 pollSchema.statics.createOptionCommitment = function(electionId, optionText) {

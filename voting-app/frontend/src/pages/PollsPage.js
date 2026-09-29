@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'react-toastify';
-import { pollService } from '../services';
+import { pollService, userService } from '../services';
 import { useAuthStore } from '../store/authStore';
+import createAuthorityCredentialProof from '../utils/authorityCredentialProof';
 
 const formatDate = (dateString) => {
   if (!dateString) return 'No end date';
@@ -34,6 +35,26 @@ const getInitials = (creator) => {
   return `${firstName.charAt(0) || ''}${lastName.charAt(0) || ''}`.toUpperCase() || 'U';
 };
 
+const isEncryptedProtocol = (protocolVersion) => (
+  [
+    'c0-encrypted',
+    'c1p-revoting-padding',
+    'c2-private-decoy',
+    'c2p-private-decoy-padding',
+    'c3-revoting-decoy',
+    'c0-mock-encrypted'
+  ].includes(protocolVersion)
+);
+
+const getProtocolLabel = (poll) => {
+  if (!isEncryptedProtocol(poll.protocolVersion)) return 'Legacy';
+  if (poll.protocolVersion === 'c1p-revoting-padding') return 'C1p revoting + padding';
+  if (poll.protocolVersion === 'c2-private-decoy') return 'C2 panic/decoy';
+  if (poll.protocolVersion === 'c2p-private-decoy-padding') return 'C2p decoy + padding';
+  if (poll.protocolVersion === 'c3-revoting-decoy') return 'C3 revoting + panic/decoy';
+  return poll.revotingEnabled ? 'C1 revoting' : 'C0 encrypted baseline';
+};
+
 const PollsPage = () => {
   const [polls, setPolls] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -63,7 +84,7 @@ const PollsPage = () => {
     }
 
     const poll = polls.find((item) => item._id === pollId);
-    const usesEncryptedProtocol = poll?.protocolVersion === 'c0-mock-encrypted';
+    const usesEncryptedProtocol = isEncryptedProtocol(poll?.protocolVersion);
 
     if (!usesEncryptedProtocol && !user?.walletAddress) {
       toast.error('Please link your wallet before voting');
@@ -72,16 +93,30 @@ const PollsPage = () => {
 
     try {
       setVotingPollId(pollId);
+      const credentialResponse = await userService.getAnonymousCredential();
+      const authorityProof = await createAuthorityCredentialProof({
+        credential: credentialResponse.data.credential,
+        credentialCommitment: credentialResponse.data.credentialCommitment,
+        electionId: pollId
+      });
       if (usesEncryptedProtocol) {
-        await pollService.submitBallot(pollId, { optionId });
+        const response = await pollService.submitBallot(pollId, {
+          optionId,
+          authorityProof
+        });
+        const receiptHash = response.data?.chainReceipt?.transactionHash;
+        toast.success(receiptHash
+          ? `Encrypted ballot accepted. Receipt tx: ${receiptHash.slice(0, 10)}...`
+          : 'Encrypted ballot accepted');
       } else {
         await pollService.vote(pollId, {
           optionId,
-          walletAddress: user.walletAddress
+          walletAddress: user.walletAddress,
+          authorityProof
         });
+        toast.success('Vote recorded successfully');
       }
 
-      toast.success(usesEncryptedProtocol ? 'Encrypted ballot accepted' : 'Vote recorded successfully');
       await loadPolls();
     } catch (error) {
       toast.error(error.response?.data?.message || error.message || 'Unable to vote right now');
@@ -149,8 +184,8 @@ const PollsPage = () => {
                   </div>
 
                   <div className="text-right">
-                    <span className="inline-flex px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-700 text-xs font-semibold">
-                      {poll.category || 'other'}
+                    <span className="inline-flex px-2.5 py-1.5 rounded-full bg-indigo-100 text-indigo-700 text-xs font-semibold leading-none">
+                      {getProtocolLabel(poll)}
                     </span>
                     <p className="text-xs text-gray-500 mt-2">{poll.status || 'active'}</p>
                   </div>

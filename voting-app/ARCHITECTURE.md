@@ -1,7 +1,7 @@
 # Voting Platform Architecture
 
 > Documentation map: this file describes the prototype application only. The
-> `docs/` set is authoritative for the Phase 2 research program:
+> `docs/` set is authoritative for the C0 encrypted baseline program:
 > [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md),
 > [docs/CRYPTOGRAPHIC_ARCHITECTURE.md](./docs/CRYPTOGRAPHIC_ARCHITECTURE.md),
 > [docs/THREAT_MODEL.md](./docs/THREAT_MODEL.md),
@@ -121,6 +121,7 @@ User → Create Discussion → Backend API
   phoneNumber: String (unique),
   aadharNumber: String (unique),
   password: String (hashed),
+  panicPassword: String (hashed; optional for accounts created before C2),
   aadharVerified: Boolean,
   walletAddress: String,
   votesCount: Number,
@@ -177,7 +178,8 @@ User → Create Discussion → Backend API
 ## API Endpoints
 
 ### Authentication
-- `POST /api/auth/register` - User registration
+- `POST /api/auth/register` - User registration, including the separate decoy
+  account password used for panic-mode login
 - `POST /api/auth/verify-otp` - OTP verification
 - `POST /api/auth/login` - User login
 - `POST /api/auth/reset-password` - Password reset
@@ -189,11 +191,39 @@ User → Create Discussion → Backend API
 - `POST /api/polls/:id/vote` - Cast vote (legacy plaintext flow)
 - `GET /api/polls/:id/results` - Get results
 
-### Polls (Phase 2 research protocol)
+### Polls (C0 encrypted protocol)
 These endpoints only apply to polls created with
-`protocolVersion: "c0-mock-encrypted"`. See `docs/CRYPTOGRAPHIC_ARCHITECTURE.md`.
-- `POST /api/polls/:pollId/ballot` - Submit a mock encrypted ballot
-- `POST /api/polls/:id/finalize` - Finalize the mock tally (creator only)
+`protocolVersion: "c0-encrypted"`. See `docs/CRYPTOGRAPHIC_ARCHITECTURE.md`.
+- `POST /api/polls/:pollId/ballot` - Submit a C0/C2/C3 AES-GCM encrypted ballot
+- `POST /api/polls/:id/finalize` - Finalize the development tally and privately cleanse C2/C3 decoy ballots (creator only)
+
+### C2 panic/decoy credentials
+
+Select **C2 panic/decoy credentials** when creating an encrypted poll, or use
+`protocolVersion: "c2-private-decoy"` in the create-poll API. During
+registration, the voter chooses a distinct decoy account password and should
+save it securely. Signing in with the usual email and that password creates a
+private panic-mode session. On the first C2/C3 ballot, the backend issues a
+stable genuine credential and panic/decoy credential for that voter and
+election, then uses the panic credential for panic-mode sessions.
+The credentials and their classifications are stored in a separate private
+MongoDB collection, encrypted with AES-256-GCM using
+`C2_REGISTRY_ENCRYPTION_KEY`. The key must be a stable 32-byte hex value (64
+hex characters); losing or changing it makes the registry unreadable and tally
+finalization fails rather than silently counting panic ballots.
+
+The ballot API stores and returns no credential-type field. Finalization reads
+the private registry, removes ballots whose commitments match panic credentials,
+and records only an aggregate `excludedPanicBallotCount`. Public results and
+the chain receipt do not contain a panic flag or credential type. C3 uses the
+same private credential mechanism and additionally enables ballot replacement.
+
+This is a trusted-backend experiment, not formal JCJ coercion resistance: the
+registrar/tally service can link voters to their credentials and distinguish
+the two login passwords. The app does not provide client-held anonymous
+credentials or publicly verifiable cleansing proof. See
+[docs/EXPERIMENT_PROTOCOL.md](./docs/EXPERIMENT_PROTOCOL.md) for the flow and
+trust assumptions.
 
 ### Discussions
 - `GET /api/discussions` - Get all discussions

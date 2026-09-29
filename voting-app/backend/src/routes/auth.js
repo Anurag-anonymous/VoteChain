@@ -1,6 +1,7 @@
 const express = require('express');
 const AuthController = require('../controllers/authController');
 const { verifyToken } = require('../middleware/auth');
+const { loginLimiter } = require('../middleware/rateLimiters');
 
 const router = express.Router();
 
@@ -11,8 +12,8 @@ router.post('/verify-email-otp', AuthController.verifyEmailOTP);
 router.post('/verify-phone-otp', AuthController.verifyPhoneOTP);
 router.post('/verify-aadhaar-otp', AuthController.verifyAadhaarOTP);
 router.post('/resend-otp', AuthController.resendOTP);
-router.post('/login', AuthController.login);
-router.post('/reset-password-request', AuthController.resetPasswordRequest);
+router.post('/login', loginLimiter, AuthController.login);
+router.post('/reset-password-request', loginLimiter, AuthController.resetPasswordRequest);
 router.post('/reset-password', AuthController.resetPasswordWithOTP);
 
 // Protected routes

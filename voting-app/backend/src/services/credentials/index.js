@@ -1,7 +1,11 @@
 const CredentialProvider = require('./CredentialProvider');
-const MockCredentialProvider = require('./MockCredentialProvider');
+const ElectionCredentialProvider = require('./ElectionCredentialProvider');
+const JcjCredentialProvider = require('./JcjCredentialProvider');
+const JcjCivitasCredentialProvider = require('./JcjCivitasCredentialProvider');
 
 module.exports = {
   CredentialProvider,
-  MockCredentialProvider
+  ElectionCredentialProvider,
+  JcjCredentialProvider,
+  JcjCivitasCredentialProvider
 };

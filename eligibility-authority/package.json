@@ -1,0 +1,14 @@
+{
+  "name": "votechain-eligibility-authority",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone human review service for VoteChain voter eligibility",
+  "scripts": {
+    "setup": "node setup.js",
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

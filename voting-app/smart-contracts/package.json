@@ -7,7 +7,17 @@
     "compile": "truffle compile",
     "migrate": "truffle migrate",
     "migrate:reset": "truffle migrate --reset",
-    "test": "truffle test",
+    "deploy:anvil": "truffle migrate --network anvil --reset",
+    "deploy:amoy": "truffle migrate --network polygon-amoy --reset",
+    "test": "truffle test test/election_ballot_box_test.js test/modular_election_test.js test/research_election_test.js",
+    "test:experiments": "node --test ./scripts/experiments/pipeline.test.js ./scripts/experiments/export-study-csv.test.js ./scripts/experiments/leakage-analysis.test.js ./scripts/experiments/activity-rate-analysis.test.js",
+    "test:amoy": "truffle test --network polygon-amoy",
+    "experiment:campaign": "node ./scripts/experiments/run-campaign.js",
+    "experiment:audit": "node ./scripts/experiments/audit-run.js",
+    "experiment:analyze": "node ./scripts/experiments/analyze-campaign.js",
+    "experiment:leakage": "node ./scripts/experiments/analyze-leakage.js",
+    "experiment:activity-rates": "node ./scripts/experiments/analyze-activity-rates.js",
+    "experiment:export": "node ./scripts/experiments/export-study-csv.js",
     "develop": "truffle develop"
   },
   "keywords": [

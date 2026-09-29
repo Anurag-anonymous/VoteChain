@@ -13,7 +13,9 @@ const initialForm = {
   walletAddress: '',
   walletPrivateKey: '',
   password: '',
-  confirmPassword: ''
+  confirmPassword: '',
+  panicPassword: '',
+  confirmPanicPassword: ''
 };
 
 const initialStatus = {
@@ -86,6 +88,26 @@ const RegisterPage = () => {
       return false;
     }
 
+    if (!formData.panicPassword || !formData.confirmPanicPassword) {
+      toast.error('Decoy account password and confirmation are required');
+      return false;
+    }
+
+    if (formData.panicPassword.length < 8) {
+      toast.error('Decoy account password must be at least 8 characters');
+      return false;
+    }
+
+    if (formData.panicPassword !== formData.confirmPanicPassword) {
+      toast.error('Decoy account passwords do not match');
+      return false;
+    }
+
+    if (formData.panicPassword === formData.password) {
+      toast.error('Decoy account password must differ from your normal password');
+      return false;
+    }
+
     if (!/^\d{10}$/.test(formData.phoneNumber)) {
       toast.error('Phone number must be 10 digits');
       return false;
@@ -112,7 +134,8 @@ const RegisterPage = () => {
         aadharNumber: formData.aadharNumber,
         walletAddress: formData.walletAddress || undefined,
         walletPrivateKey: formData.walletPrivateKey || undefined,
-        password: formData.password
+        password: formData.password,
+        panicPassword: formData.panicPassword
       });
 
       setUserId(response.data.userId);
@@ -153,6 +176,11 @@ const RegisterPage = () => {
 
       const nextStatus = response.data.verificationStatus || status;
       if (response.data.fullyVerified || (nextStatus.emailVerified && nextStatus.phoneVerified && nextStatus.aadharVerified)) {
+        if (response.data.eligibilityAuthoritySubmission === 'submitted') {
+          toast.info('Your verified details were sent for independent human eligibility review.');
+        } else if (response.data.eligibilityAuthoritySubmission !== 'submitted') {
+          toast.info('OTP verification is complete. Open Profile to retry eligibility submission when the authority is available.');
+        }
         const loginResponse = await authService.login({
           email: formData.email,
           password: formData.password
@@ -229,6 +257,9 @@ const RegisterPage = () => {
 
         {step === 'register' ? (
           <form onSubmit={handleRegister} className="space-y-4">
+            <p className="rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-sm text-indigo-900">
+              To vote, your name, contact details, and Aadhaar number are sent to the separately operated Eligibility Authority for human review. Voting stays locked until that authority approves you.
+            </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <input type="text" name="firstName" placeholder="First Name" value={formData.firstName} onChange={updateForm} required className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600" />
               <input type="text" name="lastName" placeholder="Last Name" value={formData.lastName} onChange={updateForm} required className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600" />
@@ -250,6 +281,16 @@ const RegisterPage = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <input type="password" name="password" placeholder="Password" value={formData.password} onChange={updateForm} required className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600" />
               <input type="password" name="confirmPassword" placeholder="Confirm Password" value={formData.confirmPassword} onChange={updateForm} required className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600" />
+            </div>
+            <div>
+              <p className="mb-2 text-sm font-semibold text-gray-800">Decoy account password</p>
+              <p className="mb-3 text-xs text-gray-600">
+                Use the same email with this different password to sign in to panic mode. Keep it private and do not reuse your normal password.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <input type="password" name="panicPassword" placeholder="Decoy account password" value={formData.panicPassword} onChange={updateForm} required minLength="8" autoComplete="new-password" className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600" />
+                <input type="password" name="confirmPanicPassword" placeholder="Confirm decoy password" value={formData.confirmPanicPassword} onChange={updateForm} required minLength="8" autoComplete="new-password" className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600" />
+              </div>
             </div>
             <button type="submit" disabled={loading} className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 transition disabled:opacity-50">
               {loading ? 'Sending OTPs...' : 'Register and Send OTPs'}

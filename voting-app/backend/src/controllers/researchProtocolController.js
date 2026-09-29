@@ -2,23 +2,32 @@ const mongoose = require('mongoose');
 const crypto = require('crypto');
 const Poll = require('../models/Poll');
 const User = require('../models/User');
+const blockchainService = require('../services/blockchainService');
+const { verifyEligibilityProof } = require('../services/credentials/authorityCredentialProof');
 const {
   RUNTIME_TRUSTEE_ID,
-  getPhaseTwoProtocol,
-  isResearchProtocolEnabled
+  getC0Protocol,
+  isC0ProtocolEnabled,
+  usesPanicCredentials,
+  usesC1Revoting,
+  usesPaddedActivity
 } = require('../protocol');
+const { BallotPaddingService } = require('../services/experiments/BallotPaddingService');
+
+const ballotPaddingService = new BallotPaddingService({
+  anchorDummyReceipt: (receiptRequest) => blockchainService.anchorDummyEncryptedBallotReceipt(receiptRequest)
+});
 
 /**
- * Controller for the opt-in C0 mock-encrypted research protocol.
+ * Controller for the opt-in C0 encrypted ballot protocol.
  *
- * Everything in this controller is a research boundary. Credentials, ballots,
- * and tally shares are mock values, and the tally hint is kept inside the poll
- * document instead of being published. The legacy plaintext flow stays in
- * pollController and is unaffected by this file.
+ * Ballots are randomized AES-256-GCM ciphertexts. The current tally coordinator
+ * is still a single-backend development coordinator, so trustee separation is
+ * not complete yet.
  */
 class ResearchProtocolController {
   /**
-   * Cast an encrypted mock ballot
+   * Cast an encrypted ballot
    *
    * The candidate choice is never stored in plaintext and is never returned to
    * the caller. The response exposes public submission metadata only.
@@ -26,13 +35,13 @@ class ResearchProtocolController {
   static async castEncryptedBallot(req, res) {
     try {
       const { pollId } = req.params;
-      const { optionId } = req.body;
+      const { optionId, authorityProof } = req.body;
       const userId = req.userId;
 
-      if (!isResearchProtocolEnabled()) {
+      if (!isC0ProtocolEnabled()) {
         return res.status(400).json({
           success: false,
-          message: 'The c0-mock-encrypted research protocol is disabled'
+          message: 'The encrypted C0 protocol is disabled'
         });
       }
 
@@ -50,7 +59,9 @@ class ResearchProtocolController {
         });
       }
 
-      const currentUser = await User.findById(userId);
+      const currentUser = await User.findById(userId).select(
+        '+walletPrivateKey +authoritySubjectId +authorityCredentialCommitment'
+      );
 
       if (!currentUser) {
         return res.status(404).json({
@@ -58,8 +69,18 @@ class ResearchProtocolController {
           message: 'User not found'
         });
       }
-
-      const poll = await Poll.findById(pollId);
+      if (currentUser.eligibilityStatus !== 'eligible' ||
+          !currentUser.authoritySubjectId ||
+          !currentUser.authorityCredentialCommitment) {
+        return res.status(403).json({
+          success: false,
+          message: 'Voting requires approval from the independent Eligibility Authority'
+        });
+      }
+      const pollQuery = Poll.findById(pollId);
+      const poll = typeof pollQuery.select === 'function'
+        ? await pollQuery.select('+encryptedBallots.tallyHintOptionId +paddingConfig +paddingParticipants +paddingParticipantSalt +paddingLedger')
+        : await pollQuery;
 
       if (!poll) {
         return res.status(404).json({
@@ -68,10 +89,28 @@ class ResearchProtocolController {
         });
       }
 
+      if (!verifyEligibilityProof({
+        proof: authorityProof,
+        credentialCommitment: currentUser.authoritySubjectId,
+        electionId: poll._id.toString()
+      })) {
+        return res.status(403).json({
+          success: false,
+          message: 'A valid zero-knowledge proof of Eligibility Authority credential possession is required'
+        });
+      }
+
       if (!poll.usesEncryptedProtocol()) {
         return res.status(400).json({
           success: false,
           message: 'This poll uses the legacy plaintext flow. Use POST /api/polls/:pollId/vote instead.'
+        });
+      }
+
+      if (req.user?.credentialMode === 'panic' && !usesPanicCredentials(poll.protocolVersion)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Panic login credentials can only vote in C2/C3 polls, where panic ballots are excluded during finalization'
         });
       }
 
@@ -91,9 +130,9 @@ class ResearchProtocolController {
         });
       }
 
-      const protocol = getPhaseTwoProtocol();
+      const protocol = getC0Protocol();
       const electionId = poll._id.toString();
-      const voterId = userId.toString();
+      const voterId = currentUser.authoritySubjectId;
 
       // The eligibility authority keeps the identity reference private and only
       // hands the credential provider a derived, election-scoped credential.
@@ -104,14 +143,31 @@ class ResearchProtocolController {
       });
       protocol.eligibilityAuthority.verifyEligibility({ voterId, electionId });
 
-      const credential = protocol.eligibilityAuthority.issueCredential({
-        voterId,
-        electionId,
-        credentialProvider: protocol.credentialProvider
-      });
+      const credential = usesPanicCredentials(poll.protocolVersion)
+        ? await protocol.privateCredentialRegistry.issueOrLoadCredential({
+          voterId,
+          electionId,
+          credentialProvider: protocol.credentialProvider,
+          eligibilityAuthority: protocol.eligibilityAuthority,
+          credentialType: req.user?.credentialMode === 'panic' ? 'panic' : 'genuine',
+          requirePersistence: true
+        })
+        : protocol.eligibilityAuthority.issueCredential({
+          voterId,
+          electionId,
+          credentialProvider: protocol.credentialProvider,
+          credentialType: 'genuine',
+          randomizeCredentialType: false
+        });
       const eligibilityProof = protocol.credentialProvider.proveEligibility({ credential, electionId });
+      const allowReplacement = usesC1Revoting(poll.protocolVersion);
 
-      if (poll.hasNullifierVoted(eligibilityProof.nullifier) && !poll.allowMultipleVotes) {
+      const isReplacementBallot = poll.hasNullifierVoted(eligibilityProof.nullifier);
+      const replacedBallot = isReplacementBallot
+        ? poll.encryptedBallots.find((item) => item.nullifier === eligibilityProof.nullifier && !item.superseded)
+        : null;
+
+      if (isReplacementBallot && !allowReplacement) {
         return res.status(400).json({
           success: false,
           message: 'This credential has already submitted a ballot in this poll'
@@ -127,16 +183,84 @@ class ResearchProtocolController {
       if (!protocol.ballotService.verifyBallot({ ballot, credentialProvider: protocol.credentialProvider })) {
         return res.status(400).json({
           success: false,
-          message: 'Mock ballot verification failed'
+          message: 'Encrypted ballot verification failed'
         });
       }
 
-      await poll.addEncryptedBallot(optionId, ballot, null);
+      const isPaddedProtocol = usesPaddedActivity(poll.protocolVersion);
+      const participantSelectedForPadding = isPaddedProtocol
+        ? ballotPaddingService.selectParticipant(poll, voterId)
+        : false;
+      if (isPaddedProtocol) {
+        try {
+          ballotPaddingService.assertLedgerCapacity(poll, participantSelectedForPadding);
+        } catch (error) {
+          return res.status(503).json({
+            success: false,
+            message: error.message,
+            ballotAccepted: false
+          });
+        }
+      }
+
+      const chainReceipt = await blockchainService.anchorEncryptedBallotReceipt({
+        pollId: electionId,
+        ballot,
+        walletPrivateKey: currentUser.walletPrivateKey
+      });
+
+      if (isPaddedProtocol && !chainReceipt.enabled) {
+        throw new Error('C1p/C2p require a successful on-chain ballot receipt before padding can run');
+      }
+      if (isPaddedProtocol) {
+        if (replacedBallot?.transactionHash) {
+          const replacedLedgerEntry = (poll.paddingLedger || []).find((entry) => (
+            entry.transactionHash === replacedBallot.transactionHash
+          ));
+          if (replacedLedgerEntry) {
+            replacedLedgerEntry.label = 'revote';
+          }
+        }
+        poll.paddingLedger = poll.paddingLedger || [];
+        poll.paddingLedger.push({
+          transactionHash: chainReceipt.transactionHash,
+          blockNumber: chainReceipt.blockNumber,
+          timestamp: chainReceipt.timestamp,
+          gasUsed: chainReceipt.gasUsed,
+          calldataBytes: chainReceipt.calldataBytes,
+          submitter: chainReceipt.from,
+          label: req.user?.credentialMode === 'panic'
+            ? 'panic'
+            : (isReplacementBallot ? 'revote' : 'genuine')
+        });
+      }
+
+      await poll.addEncryptedBallot(optionId, ballot, chainReceipt, {
+        allowReplacement: isReplacementBallot && allowReplacement
+      });
+
+      if (isPaddedProtocol) {
+        try {
+          await ballotPaddingService.submitPadding({
+            poll,
+            walletPrivateKey: currentUser.walletPrivateKey,
+            participantSelected: participantSelectedForPadding
+          });
+        } catch (error) {
+          return res.status(502).json({
+            success: false,
+            message: `Ballot was accepted, but configured padding failed: ${error.message}`,
+            ballotAccepted: true,
+            ballotId: ballot.ballotId
+          });
+        }
+      }
+
       await User.findByIdAndUpdate(userId, { $inc: { votesCount: 1 } });
 
       res.status(201).json({
         success: true,
-        message: 'Mock encrypted ballot accepted',
+        message: isReplacementBallot ? 'Encrypted ballot replaced' : 'Encrypted ballot accepted',
         ballot: {
           ballotId: ballot.ballotId,
           electionId: ballot.electionId,
@@ -144,7 +268,9 @@ class ResearchProtocolController {
           acceptedAt: new Date().toISOString()
         },
         tallyState: poll.tallyState,
-        securityNotice: ballot.securityNotice
+        replacedPreviousBallot: isReplacementBallot && allowReplacement,
+        chainReceipt,
+        provider: ballot.provider
       });
     } catch (error) {
       const status = error.message.includes('already submitted') ? 400 : 500;
@@ -156,9 +282,9 @@ class ResearchProtocolController {
   }
 
   /**
-   * Finalize the mock tally
+   * Finalize the encrypted C0 tally
    *
-   * A single backend mock trustee stands in for the trustee set. The share is
+   * A single backend development trustee stands in for the trustee set. The share is
    * derived from public data (poll id and accepted ballot count) so experiment
    * runs stay reproducible, and the threshold is controlled by
    * RESEARCH_TALLY_THRESHOLD for operator testing.
@@ -168,10 +294,10 @@ class ResearchProtocolController {
       const { id } = req.params;
       const userId = req.userId;
 
-      if (!isResearchProtocolEnabled()) {
+      if (!isC0ProtocolEnabled()) {
         return res.status(400).json({
           success: false,
-          message: 'The c0-mock-encrypted research protocol is disabled'
+          message: 'The encrypted C0 protocol is disabled'
         });
       }
 
@@ -204,7 +330,7 @@ class ResearchProtocolController {
       if (!poll.usesEncryptedProtocol()) {
         return res.status(400).json({
           success: false,
-          message: 'Mock tally finalization only applies to c0-mock-encrypted polls'
+          message: 'Tally finalization only applies to encrypted C0 polls'
         });
       }
 
@@ -215,19 +341,24 @@ class ResearchProtocolController {
         });
       }
 
-      const protocol = getPhaseTwoProtocol();
+      const protocol = getC0Protocol();
       const electionId = poll._id.toString();
+      const panicCredentialCommitments = await protocol.privateCredentialRegistry.getPanicCredentialCommitments({
+        electionId,
+        eligibilityAuthority: protocol.eligibilityAuthority
+      });
 
       protocol.tallyCoordinator.registerTrustee({
         trusteeId: RUNTIME_TRUSTEE_ID,
-        publicKey: `mock-public-key:${electionId}`
+        publicKey: `development-public-key:${electionId}`
       });
+      const activeBallotCount = poll.encryptedBallots.filter((ballot) => !ballot.superseded).length;
       const shareStatus = protocol.tallyCoordinator.submitShare({
         electionId,
         trusteeId: RUNTIME_TRUSTEE_ID,
         share: crypto
           .createHash('sha256')
-          .update(`share:${electionId}:${poll.encryptedBallots.length}`)
+          .update(`share:${electionId}:${activeBallotCount}`)
           .digest('hex')
       });
 
@@ -240,22 +371,29 @@ class ResearchProtocolController {
 
       const tally = protocol.tallyCoordinator.finalizeTally({
         electionId,
-        publicBallotCount: poll.encryptedBallots.length
+        publicBallotCount: activeBallotCount
       });
 
-      await poll.finalizeMockTally();
+      const finalizedPoll = await poll.finalizeEncryptedTally({
+        panicCredentialCommitments
+      });
 
       res.status(200).json({
         success: true,
-        message: 'Mock tally finalized',
+        message: 'Encrypted C0 tally finalized',
         tally,
         results: {
-          pollId: poll._id,
-          title: poll.title,
-          protocolVersion: poll.protocolVersion,
-          tallyState: poll.tallyState,
-          totalVotes: poll.totalVotes,
-          options: poll.getResults()
+          pollId: finalizedPoll._id,
+          title: finalizedPoll.title,
+          protocolVersion: finalizedPoll.protocolVersion,
+          tallyState: finalizedPoll.tallyState,
+          totalVotes: finalizedPoll.totalVotes,
+          options: finalizedPoll.getResults()
+        },
+        cleansing: {
+          policy: 'private-registrar-cleansing',
+          excludedPanicBallotCount: finalizedPoll.excludedPanicBallotCount || 0,
+          includedBallotCount: finalizedPoll.totalVotes
         }
       });
     } catch (error) {

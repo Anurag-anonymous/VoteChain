@@ -4,6 +4,9 @@
 !.env.example
 !**/.env.example
 
+# Empirical campaign data includes private ground-truth labels.
+research-runs/
+
 # Dependencies
 node_modules/
 
@@ -29,5 +32,4 @@ npm-debug.log*
 *.swp
 *.swo
 *~
-
 

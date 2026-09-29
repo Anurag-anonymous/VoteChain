@@ -5,6 +5,7 @@ import { pollService } from '../services';
 import { useAuthStore } from '../store/authStore';
 
 const initialOptions = ['', ''];
+const paddedProtocols = ['c1p-revoting-padding', 'c2p-private-decoy-padding'];
 
 const CreatePollPage = () => {
   const navigate = useNavigate();
@@ -16,7 +17,14 @@ const CreatePollPage = () => {
     category: 'other',
     endDate: '',
     walletAddress: user?.walletAddress || '',
-    tags: ''
+    tags: '',
+    protocolVersion: 'c0-encrypted',
+    paddingRatePercent: '25',
+    selectionStrategy: 'population-sample',
+    timingDistribution: 'uniform',
+    timingWindowSeconds: '5',
+    dummyTransactionsPerBallot: '1',
+    electionPopulation: '100'
   });
 
   useEffect(() => {
@@ -97,7 +105,18 @@ const CreatePollPage = () => {
           .map((tag) => tag.trim())
           .filter(Boolean),
         endDate: endDateValue.toISOString(),
-        walletAddress: linkedWalletAddress
+        walletAddress: linkedWalletAddress,
+        protocolVersion: formData.protocolVersion,
+        ...(paddedProtocols.includes(formData.protocolVersion) ? {
+          paddingConfig: {
+            paddingRatePercent: Number(formData.paddingRatePercent),
+            selectionStrategy: formData.selectionStrategy,
+            timingDistribution: formData.timingDistribution,
+            timingWindowSeconds: Number(formData.timingWindowSeconds),
+            dummyTransactionsPerBallot: Number(formData.dummyTransactionsPerBallot),
+            electionPopulation: Number(formData.electionPopulation)
+          }
+        } : {})
       };
 
       const response = await pollService.createPoll(payload);
@@ -143,6 +162,116 @@ const CreatePollPage = () => {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block font-semibold mb-2 text-gray-700">Voting protocol</label>
+            <select
+              name="protocolVersion"
+              value={formData.protocolVersion}
+              onChange={handleFieldChange}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-600"
+            >
+              <option value="c0-encrypted">C0 encrypted baseline</option>
+              <option value="c1p-revoting-padding">C1p revoting + activity padding</option>
+              <option value="c2-private-decoy">C2 panic/decoy credentials</option>
+              <option value="c2p-private-decoy-padding">C2p panic/decoy + activity padding</option>
+              <option value="c3-revoting-decoy">C3 revoting + panic/decoy credentials</option>
+            </select>
+            <p className="text-sm text-gray-500 mt-2">
+              C2/C2p/C3 use private genuine and decoy credentials. Voters use their registration-time decoy password; those ballots are excluded during trusted finalization. C1p adds revoting; C1p/C2p add configurable padding. These are experimental mechanisms, not formal coercion resistance.
+            </p>
+          </div>
+          {paddedProtocols.includes(formData.protocolVersion) && (
+            <div className="md:col-span-2 rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <h3 className="font-semibold text-amber-950">Padding experiment controls</h3>
+              <p className="mt-1 text-sm text-amber-900">
+                Padding uses additional registry transactions signed by the voter wallet. C1p/C2p require on-chain receipt anchoring and the registry contract to be deployed. Choose a population sample or independently pad each ballot. The population sample selects a fraction of voters without replacement; per-ballot mode independently samples each ballot. Selected activity emits the configured number of padding receipts.
+              </p>
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <label className="text-sm font-medium text-gray-700">
+                  Padding rate ({formData.selectionStrategy === 'population-sample' ? '% of population' : '% per ballot'})
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    name="paddingRatePercent"
+                    value={formData.paddingRatePercent}
+                    onChange={handleFieldChange}
+                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2"
+                    required
+                  />
+                </label>
+                <label className="text-sm font-medium text-gray-700">
+                  Declared election population
+                  <input
+                    type="number"
+                    min="1"
+                    max="10000"
+                    step="1"
+                    name="electionPopulation"
+                    value={formData.electionPopulation}
+                    onChange={handleFieldChange}
+                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2"
+                    required
+                  />
+                </label>
+                <label className="text-sm font-medium text-gray-700">
+                  Padding selection strategy
+                  <select
+                    name="selectionStrategy"
+                    value={formData.selectionStrategy}
+                    onChange={handleFieldChange}
+                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2"
+                  >
+                    <option value="population-sample">Sample voters without replacement</option>
+                    <option value="per-ballot">Independent per-ballot sampling</option>
+                  </select>
+                </label>
+                <label className="text-sm font-medium text-gray-700">
+                  Dummy transactions per accepted ballot
+                  <input
+                    type="number"
+                    min="0"
+                    max="20"
+                    step="1"
+                    name="dummyTransactionsPerBallot"
+                    value={formData.dummyTransactionsPerBallot}
+                    onChange={handleFieldChange}
+                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2"
+                    required
+                  />
+                </label>
+                <label className="text-sm font-medium text-gray-700">
+                  Timing distribution
+                  <select
+                    name="timingDistribution"
+                    value={formData.timingDistribution}
+                    onChange={handleFieldChange}
+                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2"
+                  >
+                    <option value="immediate">Immediate</option>
+                    <option value="fixed">Evenly spaced (fixed)</option>
+                    <option value="uniform">Uniform over window</option>
+                    <option value="exponential">Exponential gaps</option>
+                  </select>
+                </label>
+                <label className="text-sm font-medium text-gray-700">
+                  Timing window (seconds, max 60)
+                  <input
+                    type="number"
+                    min="0"
+                    max="60"
+                    step="1"
+                    name="timingWindowSeconds"
+                    value={formData.timingWindowSeconds}
+                    onChange={handleFieldChange}
+                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2"
+                    required
+                  />
+                </label>
+              </div>
+            </div>
+          )}
           <div>
             <label className="block font-semibold mb-2 text-gray-700">Category</label>
             <select

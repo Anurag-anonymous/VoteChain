@@ -51,6 +51,33 @@ voting-app/
 └── README.md
 ```
 
+## Independent Eligibility Authority
+
+The human eligibility-review service is maintained separately from this
+application in the sibling [`eligibility-authority`](../eligibility-authority/)
+directory. It has its own reviewer UI, encrypted case storage, configuration,
+and Node.js process; it does not read the VoteChain database. Start it from
+that directory with `npm start` after configuring its `.env` and the matching
+`ELIGIBILITY_AUTHORITY_*` values in `backend/.env`. Reviewers open the service
+URL, sign in with the configured authority password, check cases, and record a
+decision. Applicants can submit or refresh a case from their profile.
+
+An approval callback synchronizes an opaque authority-issued subject and
+credential commitment to VoteChain. Eligibility is required before either
+legacy or encrypted ballots are accepted. See the authority README for
+secrets, deployment, review limitations, and the distinction between the
+authority identity handle and per-election voting credentials.
+
+Encrypted and legacy voting requests now submit a Chaum-Pedersen proof of
+credential possession with an election-scoped nullifier instead of including
+the credential secret in the ballot request. The browser creates the proof;
+the backend checks it against the approved credential commitment. This protects
+the credential secret in transit but is not end-to-end voter anonymity: voting
+still requires an authenticated account, and VoteChain can associate a ballot
+submission with that account. A deployment intended to hide voter identity
+from the backend needs anonymous group-membership proofs (for example,
+Semaphore), unlinkable submission/relaying, and independent security review.
+
 ## Tech Stack
 
 - **Frontend**: React, Web3.js, Ethers.js, TailwindCSS
@@ -120,18 +147,66 @@ For Polygon testnet instead of the local chain, set
 `BLOCKCHAIN_NETWORK=polygon-amoy`, `POLYGON_RPC_URL=<amoy rpc>`, and
 `POLYGON_CHAIN_ID=80002`. Amoy is chain ID 80002; Mumbai (80001) is retired.
 
-Phase 2 research protocol controls (mock cryptography, research boundary only):
+Encrypted C0 baseline controls:
 
 ```env
-RESEARCH_PROTOCOL_ENABLED=true
+C0_PROTOCOL_ENABLED=true
 RESEARCH_TALLY_THRESHOLD=1
+C0_CREDENTIAL_ISSUER_SECRET=change-me-c0-credential-secret
+C0_BALLOT_ENCRYPTION_SECRET=change-me-c0-ballot-encryption-secret
+C1_CHAIN_RECEIPTS_ENABLED=false
+C1_ENCRYPTED_BALLOT_REGISTRY_ADDRESS=
+C1_REVOTING_ENABLED=false
 BLOCKCHAIN_ENABLED=true
 DATABASE_ENABLED=true
 ```
 
-`RESEARCH_PROTOCOL_ENABLED=false` disables the `c0-mock-encrypted` poll type and
-its ballot and finalize endpoints. See
+`C0_PROTOCOL_ENABLED=false` disables the encrypted C0 poll type and its ballot
+and finalize endpoints. The older `RESEARCH_PROTOCOL_ENABLED` name is still
+accepted when `C0_PROTOCOL_ENABLED` is not set. See
 [docs/CRYPTOGRAPHIC_ARCHITECTURE.md](./docs/CRYPTOGRAPHIC_ARCHITECTURE.md).
+
+Set `C1_CHAIN_RECEIPTS_ENABLED=true` and
+`C1_ENCRYPTED_BALLOT_REGISTRY_ADDRESS=<deployed registry>` to anchor encrypted
+ballot receipts on Anvil. With the flag off, encrypted polls stay in C0
+database-only mode.
+
+Run modes:
+
+| Mode | Settings | What happens |
+| --- | --- | --- |
+| Legacy | `protocolVersion=legacy-plaintext` | Plain vote counts are stored and shown. |
+| C0 | `C0_PROTOCOL_ENABLED=true`, `C1_CHAIN_RECEIPTS_ENABLED=false` | Ballots are encrypted in the backend DB; public counts stay hidden until finalization. |
+| C1 | `C0_PROTOCOL_ENABLED=true`, `C1_REVOTING_ENABLED=true`, `C1_CHAIN_RECEIPTS_ENABLED=false` | Experimental C1 revoting condition: replacement ballots are stored encrypted in the database, and only the final active ballot counts. |
+| C1 + receipts | `C0_PROTOCOL_ENABLED=true`, `C1_REVOTING_ENABLED=true`, `C1_CHAIN_RECEIPTS_ENABLED=true` | C1 revoting plus one on-chain receipt transaction per accepted ballot/replacement. |
+
+To inspect a C1 receipt transaction on the current Anvil chain:
+
+```powershell
+npm run chain:c1-receipt -- -TransactionHash 0xYOUR_TX_HASH
+```
+
+Useful C1 commands:
+
+```powershell
+npm run setup:local     # deploys VotingPoll and EncryptedBallotRegistry
+npm run setup:c1:on     # enables C1 revoting and receipt anchoring in backend/.env
+npm run setup:c1:off    # returns to C0 database-only encrypted ballots
+```
+
+For the experimental C1 revoting flow, set
+`C1_REVOTING_ENABLED=true` and leave `C1_CHAIN_RECEIPTS_ENABLED=false`.
+The paper's campaign runner is implemented, but the full matrix has not yet
+been executed. See
+[docs/RESEARCH_READINESS.md](./docs/RESEARCH_READINESS.md) for the requirements
+and limitations of the implemented study harness, and
+[scripts/experiments/README.md](./scripts/experiments/README.md) for commands
+to execute the Anvil or Polygon Amoy matrix. The harness is separate from the
+production app and no full campaign results have been collected.
+
+Contract regression tests run on Truffle's ephemeral development chain with
+`npm run test:contracts`; the empirical runner requires Anvil at
+`127.0.0.1:8545`.
 
 **frontend/.env.local**
 ```
@@ -257,7 +332,7 @@ truffle test
   from the Polygon faucet
 
 **Encrypted Research Polls Return 400**
-- `c0-mock-encrypted` polls require `RESEARCH_PROTOCOL_ENABLED=true` in
+- `c0-encrypted` polls require `C0_PROTOCOL_ENABLED=true` in
   `backend/.env`
 - Cast ballots with `POST /api/polls/:pollId/ballot` and finalize with
   `POST /api/polls/:id/finalize`; `POST /api/polls/:pollId/vote` is for legacy

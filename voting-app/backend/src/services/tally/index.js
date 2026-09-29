@@ -1,7 +1,11 @@
 const TallyCoordinator = require('./TallyCoordinator');
-const MockTallyCoordinator = require('./MockTallyCoordinator');
+const DevelopmentTallyCoordinator = require('./DevelopmentTallyCoordinator');
+const ThresholdTallyCoordinator = require('./ThresholdTallyCoordinator');
+const SingleTrusteeTallyCoordinator = require('./SingleTrusteeTallyCoordinator');
 
 module.exports = {
   TallyCoordinator,
-  MockTallyCoordinator
+  DevelopmentTallyCoordinator,
+  ThresholdTallyCoordinator,
+  SingleTrusteeTallyCoordinator
 };

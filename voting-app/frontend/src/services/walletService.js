@@ -27,8 +27,13 @@ const getNetworkConfig = () => {
     };
   }
 
+  const rpcUrl = process.env.REACT_APP_POLYGON_RPC;
+  if (!rpcUrl) {
+    throw new Error('REACT_APP_POLYGON_RPC must be configured for Polygon Amoy');
+  }
+
   return {
-    rpcUrl: process.env.REACT_APP_POLYGON_RPC || 'https://polygon-amoy.g.alchemy.com/v2/YOUR_ALCHEMY_KEY',
+    rpcUrl,
     chainName: process.env.REACT_APP_NETWORK_NAME || 'Polygon Amoy',
     nativeCurrency: {
       name: process.env.REACT_APP_NATIVE_CURRENCY_NAME || 'MATIC',
@@ -96,7 +101,7 @@ export const switchNetwork = async (chainId) => {
   }
 };
 
-// Add Polygon Mumbai testnet to wallet
+// Add the configured network to the wallet
 export const addNetwork = async () => {
   try {
     const networkConfig = getNetworkConfig();

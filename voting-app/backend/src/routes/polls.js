@@ -7,8 +7,10 @@ const router = express.Router();
 
 // Public routes
 router.get('/', PollController.getAllPolls);
+router.get('/mine', verifyToken, PollController.getMyPolls);
 router.get('/:id', PollController.getPoll);
 router.get('/:id/results', PollController.getPollResults);
+router.get('/:id/observer-dataset', verifyToken, PollController.getObserverDataset);
 
 // Protected routes (require authentication and Aadhar verification)
 router.post('/', verifyToken, verifyAadhar, PollController.createPoll);

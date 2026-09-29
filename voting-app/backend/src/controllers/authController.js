@@ -6,6 +6,8 @@ const emailService = require('../services/emailService');
 const smsService = require('../services/smsService');
 const blockchainService = require('../services/blockchainService');
 const { validateEmail } = require('../utils/validators');
+const { encryptCredentialMode, readCredentialMode } = require('../utils/credentialMode');
+const { submitApplicant } = require('../services/eligibilityAuthorityClient');
 
 const getOtpMaxAttempts = () => {
   const attempts = Number.parseInt(process.env.OTP_MAX_ATTEMPTS || '5', 10);
@@ -23,6 +25,17 @@ const getVerificationStatus = (user) => ({
 
 const isFullyVerified = (user) => user.emailVerified && user.phoneVerified && user.aadharVerified;
 
+const submitVerifiedApplicant = async (user) => {
+  if (!isFullyVerified(user)) return 'verification_pending';
+  try {
+    const result = await submitApplicant(user);
+    return result.configured ? 'submitted' : 'authority_not_configured';
+  } catch (error) {
+    console.error('Eligibility Authority enrollment failed:', error.message);
+    return 'submission_failed';
+  }
+};
+
 class AuthController {
   /**
    * Register user with Aadhar
@@ -35,16 +48,17 @@ class AuthController {
         email,
         phoneNumber,
         password,
+        panicPassword,
         walletAddress,
         walletPrivateKey
       } = req.body;
       const aadharNumber = req.body.aadharNumber || req.body.aadhaarNumber;
 
       // Validation
-      if (!firstName || !lastName || !email || !phoneNumber || !aadharNumber || !password) {
+      if (!firstName || !lastName || !email || !phoneNumber || !aadharNumber || !password || !panicPassword) {
         return res.status(400).json({
           success: false,
-          message: 'First name, last name, email, phone number, Aadhaar number, and password are required'
+          message: 'First name, last name, email, phone number, Aadhaar number, password, and decoy account password are required'
         });
       }
 
@@ -126,6 +140,19 @@ class AuthController {
         });
       }
 
+      if (typeof panicPassword !== 'string' || panicPassword.length < 8) {
+        return res.status(400).json({
+          success: false,
+          message: 'Decoy account password must be at least 8 characters'
+        });
+      }
+      if (panicPassword === password) {
+        return res.status(400).json({
+          success: false,
+          message: 'Decoy account password must differ from your normal password'
+        });
+      }
+
       // Check if email exists
       const emailExists = await User.findOne({ email });
       if (emailExists) {
@@ -165,6 +192,7 @@ class AuthController {
         phoneNumber,
         aadharNumber,
         password,
+        panicPassword,
         aadharOtpRequestId: aadharOtp.requestId,
         walletAddress: normalizedWalletAddress,
         walletPrivateKey: normalizedWalletPrivateKey,
@@ -210,6 +238,8 @@ class AuthController {
         userId: user._id,
         email: user.email,
         walletAddress: user.walletAddress,
+        eligibilityStatus: user.eligibilityStatus,
+        eligibilityAuthoritySubmission: 'waiting_for_otp_verification',
         verificationStatus: {
           emailVerified: false,
           phoneVerified: false,
@@ -262,15 +292,27 @@ class AuthController {
         return res.status(400).json({ success: false, message: 'Invalid or expired email OTP' });
       }
 
+      if (user.emailVerified) {
+        return res.status(200).json({
+          success: true,
+          message: 'Email already verified successfully',
+          verificationStatus: getVerificationStatus(user),
+          fullyVerified: isFullyVerified(user),
+          eligibilityAuthoritySubmission: await submitVerifiedApplicant(user)
+        });
+      }
+
       user.emailVerified = true;
       user.clearChannelOTP('email');
       await user.save();
+      const eligibilityAuthoritySubmission = await submitVerifiedApplicant(user);
 
       return res.status(200).json({
         success: true,
         message: 'Email verified successfully',
         verificationStatus: getVerificationStatus(user),
-        fullyVerified: isFullyVerified(user)
+        fullyVerified: isFullyVerified(user),
+        eligibilityAuthoritySubmission
       });
     } catch (error) {
       console.error('Email OTP verification error:', error);
@@ -297,15 +339,27 @@ class AuthController {
         return res.status(400).json({ success: false, message: 'Invalid or expired phone OTP' });
       }
 
+      if (user.phoneVerified) {
+        return res.status(200).json({
+          success: true,
+          message: 'Phone number already verified successfully',
+          verificationStatus: getVerificationStatus(user),
+          fullyVerified: isFullyVerified(user),
+          eligibilityAuthoritySubmission: await submitVerifiedApplicant(user)
+        });
+      }
+
       user.phoneVerified = true;
       user.clearChannelOTP('phone');
       await user.save();
+      const eligibilityAuthoritySubmission = await submitVerifiedApplicant(user);
 
       return res.status(200).json({
         success: true,
         message: 'Phone number verified successfully',
         verificationStatus: getVerificationStatus(user),
-        fullyVerified: isFullyVerified(user)
+        fullyVerified: isFullyVerified(user),
+        eligibilityAuthoritySubmission
       });
     } catch (error) {
       console.error('Phone OTP verification error:', error);
@@ -369,6 +423,8 @@ class AuthController {
 
       await user.save();
 
+      const eligibilityAuthoritySubmission = await submitVerifiedApplicant(user);
+
       if (isFullyVerified(user)) {
         try {
           await emailService.sendWelcomeEmail(user.email, user.firstName);
@@ -382,7 +438,8 @@ class AuthController {
         message: 'Aadhaar OTP verified successfully.',
         userId: user._id,
         verificationStatus: getVerificationStatus(user),
-        fullyVerified: isFullyVerified(user)
+        fullyVerified: isFullyVerified(user),
+        eligibilityAuthoritySubmission
       });
     } catch (error) {
       console.error('Aadhaar OTP verification error:', error);
@@ -491,7 +548,7 @@ class AuthController {
         });
       }
 
-      const user = await User.findOne({ email }).select('+password +loginAttempts +accountLocked +lockExpiry');
+      const user = await User.findOne({ email }).select('+password +panicPassword +loginAttempts +accountLocked +lockExpiry');
 
       if (!user) {
         return res.status(401).json({
@@ -515,7 +572,12 @@ class AuthController {
       }
 
       // Check password
-      const passwordMatch = await user.comparePassword(password);
+      let credentialMode = 'genuine';
+      let passwordMatch = await user.comparePassword(password);
+      if (!passwordMatch && await user.comparePanicPassword(password)) {
+        passwordMatch = true;
+        credentialMode = 'panic';
+      }
       if (!passwordMatch) {
         await user.incrementLoginAttempts();
         return res.status(401).json({
@@ -539,14 +601,15 @@ class AuthController {
       const token = jwt.sign(
         {
           id: user._id,
-          email: user.email
+          email: user.email,
+          credentialModeEnvelope: encryptCredentialMode(credentialMode)
         },
         getJwtSecret(),
         { expiresIn: process.env.JWT_EXPIRE || '7d' }
       );
 
       const refreshToken = jwt.sign(
-        { id: user._id },
+        { id: user._id, credentialModeEnvelope: encryptCredentialMode(credentialMode) },
         getRefreshTokenSecret(),
         { expiresIn: process.env.REFRESH_TOKEN_EXPIRE || '30d' }
       );
@@ -562,7 +625,8 @@ class AuthController {
           lastName: user.lastName,
           email: user.email,
           walletAddress: user.walletAddress || null,
-          walletVerified: !!user.walletVerified
+          walletVerified: !!user.walletVerified,
+          eligibilityStatus: user.eligibilityStatus || 'pending'
         }
       });
     } catch (error) {
@@ -690,6 +754,7 @@ class AuthController {
       }
 
       const decoded = jwt.verify(refreshToken, getRefreshTokenSecret());
+      const credentialMode = readCredentialMode(decoded);
       const user = await User.findById(decoded.id);
 
       if (!user) {
@@ -703,7 +768,8 @@ class AuthController {
       const newToken = jwt.sign(
         {
           id: user._id,
-          email: user.email
+          email: user.email,
+          credentialModeEnvelope: encryptCredentialMode(credentialMode)
         },
         getJwtSecret(),
         { expiresIn: process.env.JWT_EXPIRE || '7d' }

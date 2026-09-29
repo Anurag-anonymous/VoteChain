@@ -1,5 +1,6 @@
 const express = require('express');
 const UserController = require('../controllers/userController');
+const EligibilityAuthorityController = require('../controllers/eligibilityAuthorityController');
 const { verifyToken, verifyAadhar } = require('../middleware/auth');
 
 const router = express.Router();
@@ -9,6 +10,8 @@ router.post('/generate-wallet', UserController.generateWalletAddress);
 
 // Protected routes
 router.get('/profile', verifyToken, UserController.getProfile);
+router.post('/profile/eligibility-submission', verifyToken, EligibilityAuthorityController.submitApplicant);
+router.get('/profile/anonymous-credential', verifyToken, EligibilityAuthorityController.getCredential);
 router.post('/profile/generate-wallet', verifyToken, UserController.generateWalletAddress);
 router.put('/profile', verifyToken, UserController.updateProfile);
 router.post('/change-password', verifyToken, UserController.changePassword);

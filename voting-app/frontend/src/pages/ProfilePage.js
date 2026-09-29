@@ -8,6 +8,8 @@ const ProfilePage = () => {
   const { isAuthenticated, user, updateUser } = useAuthStore();
   const [loading, setLoading] = useState(false);
   const [generatingWallet, setGeneratingWallet] = useState(false);
+  const [submittingEligibility, setSubmittingEligibility] = useState(false);
+  const [anonymousCredential, setAnonymousCredential] = useState('');
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -19,18 +21,35 @@ const ProfilePage = () => {
   });
 
   useEffect(() => {
-    if (user) {
-      setFormData({
-        firstName: user.firstName || '',
-        lastName: user.lastName || '',
-        email: user.email || '',
-        phoneNumber: user.phoneNumber || '',
-        walletAddress: user.walletAddress || '',
-        bio: user.bio || '',
-        profileImage: user.profileImage || ''
-      });
-    }
-  }, [user]);
+    const userId = user?.id;
+    const loadProfile = async () => {
+      if (!userId) return;
+      try {
+        const response = await userService.getProfile();
+        const currentUser = useAuthStore.getState().user || {};
+        const updatedUser = { ...currentUser, ...response.data.user };
+        updateUser(updatedUser);
+        setFormData({
+          firstName: updatedUser.firstName || '',
+          lastName: updatedUser.lastName || '',
+          email: updatedUser.email || '',
+          phoneNumber: updatedUser.phoneNumber || '',
+          walletAddress: updatedUser.walletAddress || '',
+          bio: updatedUser.bio || '',
+          profileImage: updatedUser.profileImage || ''
+        });
+        if (response.data.user.eligibilityStatus === 'eligible') {
+          const credentialResponse = await userService.getAnonymousCredential();
+          setAnonymousCredential(credentialResponse.data.credential);
+        }
+      } catch (error) {
+        if (error.response?.status !== 403) {
+          toast.error(error.response?.data?.message || 'Could not load eligibility profile');
+        }
+      }
+    };
+    loadProfile();
+  }, [user?.id, updateUser]);
 
   if (!isAuthenticated) {
     return <Navigate to="/login" />;
@@ -82,11 +101,62 @@ const ProfilePage = () => {
     }
   };
 
+  const handleSubmitEligibility = async () => {
+    setSubmittingEligibility(true);
+    try {
+      const response = await userService.submitEligibilityApplication();
+      updateUser({ ...user, eligibilityStatus: response.data.eligibilityStatus });
+      toast.success(response.data.message || 'Eligibility case submitted for human review');
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Could not submit eligibility case');
+    } finally {
+      setSubmittingEligibility(false);
+    }
+  };
+
   return (
     <div className="max-w-3xl mx-auto">
       <h1 className="text-4xl font-bold mb-8">My Profile</h1>
 
       <div className="bg-white p-8 rounded-lg shadow-md">
+        <section className="mb-8 rounded-lg border border-indigo-100 bg-indigo-50 p-5">
+          <h2 className="text-lg font-semibold text-indigo-950">Voting eligibility</h2>
+          <p className="mt-1 text-sm text-indigo-900">
+            Status: <strong>{(user?.eligibilityStatus || 'pending').replace('_', ' ')}</strong>.
+            An independent reviewer checks your submitted details; email, phone, and Aadhaar OTP checks alone do not grant voting eligibility.
+          </p>
+          {user?.eligibilityStatus !== 'eligible' && user?.eligibilityStatus !== 'rejected' && (
+            <button
+              type="button"
+              onClick={handleSubmitEligibility}
+              disabled={submittingEligibility}
+              className="mt-3 rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {submittingEligibility ? 'Submitting...' : 'Submit or refresh eligibility review'}
+            </button>
+          )}
+          {user?.eligibilityStatus === 'rejected' && (
+            <p className="mt-3 text-sm text-red-800">
+              Contact the Eligibility Authority through its published review channel if you believe this decision should be appealed.
+            </p>
+          )}
+          {anonymousCredential && (
+            <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+              <p className="font-semibold text-emerald-950">Your anonymous voting credential</p>
+              <p className="mt-1 text-xs text-emerald-900">
+                This secret is used in your browser to prove eligibility without including it in the ballot request. Keep it private. VoteChain still knows which account is signed in; this prototype does not hide your identity from the backend.
+              </p>
+              <code className="mt-2 block break-all rounded bg-white p-3 text-xs">{anonymousCredential}</code>
+              <button
+                type="button"
+                onClick={() => navigator.clipboard.writeText(anonymousCredential)}
+                className="mt-2 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white"
+              >
+                Copy credential
+              </button>
+            </div>
+          )}
+        </section>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
           <div className="bg-indigo-50 p-4 rounded-lg">
             <p className="text-sm text-gray-500">Polls created</p>

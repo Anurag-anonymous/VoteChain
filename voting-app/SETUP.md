@@ -28,6 +28,17 @@ cd backend
 cp .env.example .env
 ```
 
+For local C2/C3 polls, generate and persist the required registry encryption
+key from the repository root:
+
+```powershell
+.\scripts\ensure-c2-registry-key.ps1
+```
+
+This preserves an existing valid key and replaces only a missing or placeholder
+key. Restart the backend after changing `.env`. Keep the key backed up and
+unchanged for as long as C2/C3 credential records must be read.
+
 Edit `backend/.env` with:
 ```env
 PORT=5000
@@ -48,8 +59,12 @@ PRIVATE_KEY=your_wallet_private_key
 AADHAR_API_KEY=your_aadhar_api_key
 SMTP_USER=your_email@gmail.com
 SMTP_PASS=your_app_password
-# Phase 2 research protocol (mock cryptography, research boundary only)
-RESEARCH_PROTOCOL_ENABLED=true
+# Encrypted C0 baseline
+C0_PROTOCOL_ENABLED=true
+C0_CREDENTIAL_ISSUER_SECRET=change-me-c0-credential-secret
+C0_BALLOT_ENCRYPTION_SECRET=change-me-c0-ballot-encryption-secret
+C1_CHAIN_RECEIPTS_ENABLED=false
+C1_ENCRYPTED_BALLOT_REGISTRY_ADDRESS=
 RESEARCH_TALLY_THRESHOLD=1
 ```
 
@@ -160,7 +175,10 @@ npm run dev
    - **Aadhar**: Use any 12-digit number (e.g., 123456789012)
    - **Phone**: Use any Indian format (e.g., 9876543210)
    - **Password**: Min 8 characters
-3. Verify OTP (check console or email)
+   - **Decoy account password**: Choose a second, different password and save it
+     securely. Sign in with the same email and this password to activate panic
+     mode for C2/C3 ballots.
+   3. Verify OTP (check console or email)
 
 ### 2. Connect Wallet
 1. Login to account

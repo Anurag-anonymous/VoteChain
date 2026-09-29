@@ -2,12 +2,10 @@ const fs = require('fs');
 const path = require('path');
 
 /**
- * Phase 2 network registry.
+ * C0 network registry.
  *
  * This is the single source of truth for chain IDs, RPC environment variable
  * names, explorer URLs, signing policy, and deployment manifest locations.
- * `src/config/blockchain.js` keeps its own legacy branch for backwards
- * compatibility with older env files; new code should read the registry.
  */
 const DEFAULT_NETWORK_KEY = 'anvil';
 const DEFAULT_CHAIN_ID = 31337;

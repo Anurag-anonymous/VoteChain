@@ -13,9 +13,26 @@ const VOTING_CONTRACT_ABI = [
   'event VoteCasted(uint256 indexed pollId, address indexed voter, uint256 indexed optionIndex)'
 ];
 
+const ENCRYPTED_BALLOT_REGISTRY_ABI = [
+  'function submitEncryptedBallotReceipt(bytes32 pollId, bytes32 ballotId, bytes32 nullifierHash, bytes32 ballotCiphertextHash) external',
+  'function usedNullifiers(bytes32 pollId, bytes32 nullifierHash) public view returns (bool)',
+  'function getReceiptCount(bytes32 pollId) external view returns (uint256)',
+  'event EncryptedBallotSubmitted(bytes32 indexed pollId, bytes32 indexed nullifierHash, bytes32 indexed ballotId, bytes32 ballotCiphertextHash, address submitter, uint256 timestamp)'
+];
+
+const toBytes32Hash = (value) => ethers.sha256(ethers.toUtf8Bytes(String(value)));
+
 class BlockchainService {
+  constructor() {
+    this.localReceiptNullifiers = new Set();
+  }
+
   isBlockchainEnabled() {
     return process.env.BLOCKCHAIN_ENABLED !== 'false';
+  }
+
+  isC1ReceiptAnchoringEnabled() {
+    return process.env.C1_CHAIN_RECEIPTS_ENABLED === 'true';
   }
 
   async assertRpcAvailable() {
@@ -58,8 +75,71 @@ class BlockchainService {
     return new ethers.Contract(getContractAddress(), VOTING_CONTRACT_ABI, this.getSigner(walletPrivateKey));
   }
 
+  getEncryptedBallotRegistryAddress() {
+    return process.env.C1_ENCRYPTED_BALLOT_REGISTRY_ADDRESS || '';
+  }
+
+  getEncryptedBallotRegistry(walletPrivateKey) {
+    return new ethers.Contract(
+      this.getEncryptedBallotRegistryAddress(),
+      ENCRYPTED_BALLOT_REGISTRY_ABI,
+      this.getSigner(walletPrivateKey)
+    );
+  }
+
+  async assertEncryptedBallotRegistryDeployed() {
+    await this.assertRpcAvailable();
+    const contractAddress = this.getEncryptedBallotRegistryAddress();
+
+    if (!ethers.isAddress(contractAddress)) {
+      throw new Error('C1_ENCRYPTED_BALLOT_REGISTRY_ADDRESS must be a deployed contract address');
+    }
+
+    const code = await provider.getCode(contractAddress);
+
+    if (!code || code === '0x') {
+      throw new Error(`No EncryptedBallotRegistry contract is deployed at ${contractAddress} on ${network}`);
+    }
+
+    return contractAddress;
+  }
+
+  buildEncryptedBallotReceipt({ pollId, ballot }) {
+    if (!pollId || !ballot || !ballot.ballotId || !ballot.eligibilityProof?.nullifier) {
+      throw new Error('pollId and a complete encrypted ballot are required for C1 receipt anchoring');
+    }
+
+    const ciphertextMaterial = [
+      ballot.encryptedCandidate,
+      typeof ballot.proof === 'string' ? ballot.proof : JSON.stringify(ballot.proof || {}),
+      ballot.randomnessCommitment
+    ].join(':');
+
+    return {
+      pollIdHash: toBytes32Hash(pollId),
+      ballotIdHash: toBytes32Hash(ballot.ballotId),
+      nullifierHash: toBytes32Hash(`${ballot.eligibilityProof.nullifier}:${ballot.ballotId}`),
+      ballotCiphertextHash: toBytes32Hash(ciphertextMaterial)
+    };
+  }
+
+  rememberEncryptedBallotReceipt({ pollId, nullifierHash }) {
+    const key = `${pollId}:${nullifierHash}`;
+
+    if (this.localReceiptNullifiers.has(key)) {
+      throw new Error('C1 receipt nullifier already anchored for this poll');
+    }
+
+    this.localReceiptNullifiers.add(key);
+    return true;
+  }
+
+  resetLocalReceiptCache() {
+    this.localReceiptNullifiers.clear();
+  }
+
   async fundWalletIfNeeded(walletAddress) {
-    if (!['anvil', 'local'].includes(network) || !walletAddress) {
+    if (!this.isBlockchainEnabled() || !['anvil', 'local'].includes(network) || !walletAddress) {
       return;
     }
 
@@ -71,7 +151,36 @@ class BlockchainService {
     }
 
     const amount = ethers.parseEther(process.env.LOCAL_WALLET_FUND_AMOUNT || '1');
-    const funder = getSigner();
+    const configuredFunder = getSigner();
+    const configuredFunderAddress = await configuredFunder.getAddress();
+    const feeData = await provider.getFeeData();
+    const gasPrice = feeData.maxFeePerGas ?? feeData.gasPrice ?? 0n;
+    const requiredFunderBalance = amount + gasPrice * 21_000n;
+    let funder = configuredFunder;
+
+    if ((await provider.getBalance(configuredFunderAddress)) < requiredFunderBalance) {
+      let rpcFunderAddress;
+      for (const rpcFunder of await provider.listAccounts()) {
+        const address = await rpcFunder.getAddress();
+        if (address.toLowerCase() === walletAddress.toLowerCase()) continue;
+        if ((await provider.getBalance(address)) >= requiredFunderBalance) {
+          funder = rpcFunder;
+          rpcFunderAddress = address;
+          break;
+        }
+      }
+
+      if (!rpcFunderAddress) {
+        throw new Error(
+          `Configured local funding account ${configuredFunderAddress} and unlocked RPC accounts ` +
+          `do not have enough funds to send ${ethers.formatEther(amount)} ETH. ` +
+          'Start a funded local Anvil or Ganache node, then retry.'
+        );
+      }
+
+      console.info(`Using funded local RPC account ${rpcFunderAddress} for wallet funding`);
+    }
+
     const tx = await funder.sendTransaction({ to: walletAddress, value: amount });
     await tx.wait();
   }
@@ -166,6 +275,96 @@ class BlockchainService {
     } catch (error) {
       console.error('Error casting vote on blockchain:', error);
       throw new Error(`Failed to cast vote: ${error.message}`);
+    }
+  }
+
+  async anchorEncryptedBallotReceipt({ pollId, ballot, walletPrivateKey }) {
+    if (!this.isC1ReceiptAnchoringEnabled()) {
+      return {
+        enabled: false,
+        transactionHash: null,
+        blockNumber: null,
+        from: null,
+        to: null,
+        hashes: null
+      };
+    }
+
+    try {
+      const hashes = this.buildEncryptedBallotReceipt({ pollId, ballot });
+
+      const signer = this.getSigner(walletPrivateKey);
+      await this.assertEncryptedBallotRegistryDeployed();
+      await this.fundWalletIfNeeded(await signer.getAddress());
+
+      const registry = this.getEncryptedBallotRegistry(walletPrivateKey);
+      const alreadyUsed = await registry.usedNullifiers(hashes.pollIdHash, hashes.nullifierHash);
+
+      if (alreadyUsed) {
+        throw new Error('C1 receipt nullifier already anchored for this poll');
+      }
+
+      const tx = await registry.submitEncryptedBallotReceipt(
+        hashes.pollIdHash,
+        hashes.ballotIdHash,
+        hashes.nullifierHash,
+        hashes.ballotCiphertextHash
+      );
+      const receipt = await tx.wait();
+      const block = await provider.getBlock(receipt.blockNumber);
+      this.rememberEncryptedBallotReceipt({ pollId, nullifierHash: hashes.nullifierHash });
+
+      return {
+        enabled: true,
+        transactionHash: receipt.hash,
+        blockNumber: receipt.blockNumber,
+        timestamp: block ? new Date(Number(block.timestamp) * 1000).toISOString() : new Date().toISOString(),
+        calldataBytes: (tx.data.length - 2) / 2,
+        from: await signer.getAddress(),
+        to: this.getEncryptedBallotRegistryAddress(),
+        gasUsed: receipt.gasUsed.toString(),
+        hashes
+      };
+    } catch (error) {
+      console.error('Error anchoring encrypted ballot receipt:', error);
+      throw new Error(`Failed to anchor encrypted ballot receipt: ${error.message}`);
+    }
+  }
+
+  async anchorDummyEncryptedBallotReceipt({ pollId, walletPrivateKey }) {
+    if (!this.isC1ReceiptAnchoringEnabled()) {
+      throw new Error('Padded protocols require C1_CHAIN_RECEIPTS_ENABLED=true');
+    }
+
+    try {
+      const signer = this.getSigner(walletPrivateKey);
+      await this.assertEncryptedBallotRegistryDeployed();
+      await this.fundWalletIfNeeded(await signer.getAddress());
+      const registry = this.getEncryptedBallotRegistry(walletPrivateKey);
+      const pollIdHash = toBytes32Hash(pollId);
+      const ballotIdHash = ethers.hexlify(ethers.randomBytes(32));
+      const nullifierHash = ethers.hexlify(ethers.randomBytes(32));
+      const ballotCiphertextHash = ethers.hexlify(ethers.randomBytes(32));
+      const tx = await registry.submitEncryptedBallotReceipt(
+        pollIdHash,
+        ballotIdHash,
+        nullifierHash,
+        ballotCiphertextHash
+      );
+      const receipt = await tx.wait();
+      const block = await provider.getBlock(receipt.blockNumber);
+
+      return {
+        transactionHash: receipt.hash,
+        blockNumber: receipt.blockNumber,
+        timestamp: block ? new Date(Number(block.timestamp) * 1000).toISOString() : new Date().toISOString(),
+        gasUsed: receipt.gasUsed.toString(),
+        calldataBytes: (tx.data.length - 2) / 2,
+        from: await signer.getAddress()
+      };
+    } catch (error) {
+      console.error('Error anchoring padding receipt:', error);
+      throw new Error(`Failed to anchor padding receipt: ${error.message}`);
     }
   }
 

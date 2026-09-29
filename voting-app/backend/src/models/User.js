@@ -43,6 +43,31 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  eligibilityStatus: {
+    type: String,
+    enum: ['pending', 'eligible', 'rejected', 'needs_info'],
+    default: 'pending'
+  },
+  authoritySubjectId: {
+    type: String,
+    select: false
+  },
+  authorityCredentialCommitment: {
+    type: String,
+    select: false
+  },
+  authorityCredentialEnvelope: {
+    type: String,
+    select: false
+  },
+  authorityDecisionId: {
+    type: String,
+    select: false
+  },
+  authorityDecisionAt: {
+    type: Date,
+    select: false
+  },
   aadharVerificationDate: Date,
   aadharOtpRequestId: {
     type: String,
@@ -87,6 +112,10 @@ const userSchema = new mongoose.Schema({
     required: true,
     minlength: 8,
     select: false // Don't return password by default
+  },
+  panicPassword: {
+    type: String,
+    select: false
   },
   
   // OTP
@@ -190,12 +219,20 @@ const userSchema = new mongoose.Schema({
 
 // Hash password before saving
 userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
+  const passwordModified = this.isModified('password');
+  const panicPasswordModified = this.isModified('panicPassword');
+  if (!passwordModified && !panicPasswordModified) return next();
 
   try {
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    this.lastPasswordChange = Date.now();
+    if (passwordModified) {
+      const salt = await bcrypt.genSalt(10);
+      this.password = await bcrypt.hash(this.password, salt);
+      this.lastPasswordChange = Date.now();
+    }
+    if (panicPasswordModified && this.panicPassword) {
+      const salt = await bcrypt.genSalt(10);
+      this.panicPassword = await bcrypt.hash(this.panicPassword, salt);
+    }
     next();
   } catch (error) {
     next(error);
@@ -205,6 +242,10 @@ userSchema.pre('save', async function(next) {
 // Method to compare passwords
 userSchema.methods.comparePassword = async function(candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
+};
+
+userSchema.methods.comparePanicPassword = async function(candidatePassword) {
+  return !!this.panicPassword && bcrypt.compare(candidatePassword, this.panicPassword);
 };
 
 // Method to verify OTP

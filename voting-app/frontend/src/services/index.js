@@ -15,8 +15,10 @@ const authService = {
 
 const pollService = {
   getAllPolls: (params) => api.get('/polls', { params }),
+  getMyPolls: () => api.get('/polls/mine'),
   getPoll: (id) => api.get(`/polls/${id}`),
   getPollResults: (id) => api.get(`/polls/${id}/results`),
+  getObserverDataset: (id) => api.get(`/polls/${id}/observer-dataset`),
   createPoll: (data) => api.post('/polls', data),
   vote: (pollId, data) => api.post(`/polls/${pollId}/vote`, data),
   submitBallot: (pollId, data) => api.post(`/polls/${pollId}/ballot`, data),
@@ -38,6 +40,8 @@ const discussionService = {
 
 const userService = {
   getProfile: () => api.get('/users/profile'),
+  submitEligibilityApplication: () => api.post('/users/profile/eligibility-submission'),
+  getAnonymousCredential: () => api.get('/users/profile/anonymous-credential'),
   updateProfile: (data) => api.put('/users/profile', data),
   changePassword: (data) => api.post('/users/change-password', data),
   getUserStats: () => api.get('/users/stats'),

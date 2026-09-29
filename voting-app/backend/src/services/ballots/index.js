@@ -1,7 +1,7 @@
 const BallotService = require('./BallotService');
-const MockBallotService = require('./MockBallotService');
+const EncryptedBallotService = require('./EncryptedBallotService');
 
 module.exports = {
   BallotService,
-  MockBallotService
+  EncryptedBallotService
 };

@@ -22,16 +22,29 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// Exponential backoff helper
+const exponentialBackoff = (retryCount) => {
+  const baseDelay = 1000; // 1 second
+  const maxDelay = 32000; // 32 seconds
+  const delay = Math.min(baseDelay * Math.pow(2, retryCount - 1), maxDelay);
+  return new Promise(resolve => setTimeout(resolve, delay));
+};
+
 // Handle token expiration
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
+    const maxRetries = 3;
+    const retryCount = originalRequest._retryCount || 0;
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
-      originalRequest._retry = true;
+    // Handle 401 with exponential backoff
+    if (error.response?.status === 401 && retryCount < maxRetries) {
+      originalRequest._retryCount = retryCount + 1;
 
       try {
+        await exponentialBackoff(retryCount + 1);
+        
         const refreshToken = localStorage.getItem('refreshToken');
         const response = await axios.post(
           `${API_URL}/auth/refresh-token`,
@@ -48,6 +61,13 @@ api.interceptors.response.use(
         window.location.href = '/login';
         return Promise.reject(err);
       }
+    }
+
+    // Handle 429 (rate limit) with exponential backoff
+    if (error.response?.status === 429 && retryCount < maxRetries) {
+      originalRequest._retryCount = retryCount + 1;
+      await exponentialBackoff(retryCount + 1);
+      return api(originalRequest);
     }
 
     return Promise.reject(error);

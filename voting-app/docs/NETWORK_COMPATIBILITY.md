@@ -1,6 +1,6 @@
 # Network Compatibility
 
-Phase 2 supports two actively generated networks. Legacy names are accepted as
+C0 supports two actively generated networks. Legacy names are accepted as
 aliases so existing configuration files keep working.
 
 | Network key | Chain ID | RPC env | Default RPC | Signing |
@@ -24,11 +24,11 @@ The registry lives in `backend/src/config/networks.js` and exports:
 - `listNetworks()`, `canSignLocally(key)`, and
   `loadDeployment(contractName, networkKey)`.
 
-`backend/src/config/blockchain.js` keeps its own legacy branch and falls back to
-the Amoy branch when `BLOCKCHAIN_NETWORK` is unset, for backwards compatibility
-with older env files. Always set `BLOCKCHAIN_NETWORK` explicitly. Only `anvil`
-sets `allowLocalPrivateKeySigning: true`; the local prototype stores a generated
-wallet key per user, and that must not be carried to a public network.
+`backend/src/config/blockchain.js` consumes this registry directly. It does not
+fall back from an unset public-network RPC, and local private-key signing is
+refused for `polygon-amoy`. Only `anvil` sets
+`allowLocalPrivateKeySigning: true`; generated user wallet keys must not be
+carried to a public network.
 
 ## Deployment manifests
 
@@ -59,8 +59,9 @@ before any experiment that touches a chain.
 - `REACT_APP_CHAIN_ID` is `31337` and `REACT_APP_NETWORK_NAME` is `Local Anvil`
   in `frontend/.env.example`. `walletService.js` verifies the connected network
   against `REACT_APP_CHAIN_ID` and prompts a switch when it differs.
-- Environment variable names are unchanged from the earlier Mumbai setup; only
-  the values moved to Anvil/Amoy.
+- `smart-contracts/truffle-config.js` exposes only `anvil` and
+  `polygon-amoy`; Polygon deployment requires `POLYGON_RPC_URL` and
+  `DEPLOYER_PRIVATE_KEY`.
 
 ## Migration notes
 

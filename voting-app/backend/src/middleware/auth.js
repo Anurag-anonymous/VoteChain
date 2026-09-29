@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { readCredentialMode } = require('../utils/credentialMode');
 
 const getJwtSecret = () => process.env.JWT_SECRET || 'development-jwt-secret-change-me';
 
@@ -16,10 +17,19 @@ const verifyToken = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, getJwtSecret());
-    req.user = decoded;
+    req.user = {
+      ...decoded,
+      credentialMode: readCredentialMode(decoded)
+    };
     req.userId = decoded.id;
 
-    const user = await User.findById(decoded.id);
+    const userLookup = User.findById(decoded.id);
+    const user = userLookup && typeof userLookup.then === 'function'
+      ? await userLookup
+      : userLookup && typeof userLookup.select === 'function'
+        ? await userLookup.select()
+        : userLookup;
+
     if (!user) {
       return res.status(404).json({
         success: false,
