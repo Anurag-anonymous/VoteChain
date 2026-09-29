@@ -11,7 +11,6 @@ test('exports campaign, run, auditor, public transaction and partial-operation r
     const campaignDirectory = path.join(root, 'anvil', 'sample');
     const completeDirectory = path.join(campaignDirectory, 'run-one');
     const failedDirectory = path.join(campaignDirectory, 'run-two');
-    const completedTransactionHash = `0x${'1'.repeat(64)}`;
     fs.mkdirSync(completeDirectory, { recursive: true });
     fs.mkdirSync(failedDirectory, { recursive: true });
     const writeJson = (directory, filename, value) => {
@@ -51,14 +50,14 @@ test('exports campaign, run, auditor, public transaction and partial-operation r
     });
     writeJson(completeDirectory, 'operations.json', [{
       operation: 'commit',
-      transactionHash: completedTransactionHash,
+      transactionHash: '0xtx1',
       from: '0xactor',
       blockNumber: 10,
       gasUsed: '90000',
       calldataBytes: 132
     }]);
     writeJson(completeDirectory, 'public-records.json', [{
-      transactionHash: completedTransactionHash,
+      transactionHash: '0xtx1',
       submitter: '0xactor',
       recipient: '0xcontract',
       blockNumber: 10,
@@ -70,7 +69,7 @@ test('exports campaign, run, auditor, public transaction and partial-operation r
       eventNames: ['BallotCommitted', 'Test, Event'],
       interTransactionSeconds: 1,
       blockInterval: 1,
-      senderTransactionCount: 3
+      senderTransactionCount: 1
     }]);
     writeJson(completeDirectory, 'auditor.json', {
       verified: true,
@@ -114,7 +113,6 @@ test('exports campaign, run, auditor, public transaction and partial-operation r
     assert.equal(rows.filter((row) => row.startsWith('campaign,')).length, 1);
     assert.equal(rows.filter((row) => row.startsWith('run,')).length, 2);
     assert.equal(rows.filter((row) => row.startsWith('transaction,')).length, 2);
-    assert.ok(rows.find((row) => row.startsWith('transaction,')).endsWith(',1'));
     assert.ok(csv.includes('"[""BallotCommitted"",""Test, Event""]"'));
     assert.ok(csv.includes('"{""0"":1}"'));
     assert.ok(csv.includes('PRIVATE_LABEL_SENTINEL') === false);

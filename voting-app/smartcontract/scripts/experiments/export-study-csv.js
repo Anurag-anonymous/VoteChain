@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const { cumulativeSenderCounts } = require('./transaction-metadata');
 
 const COLUMNS = [
   'record_type',
@@ -222,9 +221,6 @@ const transactionRows = ({ root, resultPath, result, manifest, audit }) => {
   const publicRecords = completed
     ? readJson(path.join(directory, 'public-records.json'), true)
     : readJson(path.join(directory, 'partial-public-records.json')) || [];
-  const senderCounts = completed
-    ? cumulativeSenderCounts(publicRecords, result.runId || path.basename(directory))
-    : new Map();
   const publicByHash = new Map(publicRecords.map((record) => [
     String(record.transactionHash).toLowerCase(),
     record
@@ -253,9 +249,7 @@ const transactionRows = ({ root, resultPath, result, manifest, audit }) => {
       event_names_json: record && record.eventNames,
       inter_transaction_seconds: record && record.interTransactionSeconds,
       block_interval: record && record.blockInterval,
-      sender_transaction_count: record && (senderCounts.has(hash)
-        ? senderCounts.get(hash)
-        : record.senderTransactionCount)
+      sender_transaction_count: record && record.senderTransactionCount
     });
   }
 
@@ -277,9 +271,7 @@ const transactionRows = ({ root, resultPath, result, manifest, audit }) => {
       event_names_json: record.eventNames,
       inter_transaction_seconds: record.interTransactionSeconds,
       block_interval: record.blockInterval,
-      sender_transaction_count: senderCounts.has(hash)
-        ? senderCounts.get(hash)
-        : record.senderTransactionCount
+      sender_transaction_count: record.senderTransactionCount
     });
   }
   return rows;

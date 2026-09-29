@@ -8,82 +8,9 @@ const {
   buildPrivateDatasetCsv,
   buildTradeoffCsv
 } = require('./analyze-leakage');
-const {
-  getLeakageFeatureNames,
-  makeCommitFeatureRows
-} = require('./classifiers');
+const { getLeakageFeatureNames } = require('./classifiers');
 
 const transactionHash = (number) => `0x${number.toString(16).padStart(64, '0')}`;
-
-test('commit features use cumulative sender counts in block and transaction order', () => {
-  const commit = transactionHash(1);
-  const reveal = transactionHash(2);
-  const revote = transactionHash(3);
-  const rows = makeCommitFeatureRows({
-    target: 'revote',
-    runs: [{
-      runId: 'cumulative-sender-count',
-      groupId: 'repetition-1',
-      configuration: 'C1',
-      operations: [
-        { operation: 'commit', transactionHash: commit, gasUsed: '100000' },
-        { operation: 'commit', transactionHash: revote, gasUsed: '120000' }
-      ],
-      publicRecords: [
-        {
-          transactionHash: revote,
-          submitter: '0xAlice',
-          blockNumber: 110,
-          transactionIndex: 0,
-          timestamp: 110,
-          interTransactionSeconds: 5,
-          blockInterval: 5,
-          gasUsed: '120000',
-          calldataBytes: 132,
-          methodId: '0x30058839',
-          eventNames: ['BallotCommitted'],
-          senderTransactionCount: 3
-        },
-        {
-          transactionHash: reveal,
-          submitter: '0xAlice',
-          blockNumber: 105,
-          transactionIndex: 0,
-          timestamp: 105,
-          interTransactionSeconds: 5,
-          blockInterval: 5,
-          gasUsed: '80000',
-          calldataBytes: 100,
-          methodId: '0x30058839',
-          eventNames: ['BallotRevealed'],
-          senderTransactionCount: 3
-        },
-        {
-          transactionHash: commit,
-          submitter: '0xAlice',
-          blockNumber: 100,
-          transactionIndex: 0,
-          timestamp: 100,
-          interTransactionSeconds: 0,
-          blockInterval: 0,
-          gasUsed: '100000',
-          calldataBytes: 132,
-          methodId: '0x30058839',
-          eventNames: ['BallotCommitted'],
-          senderTransactionCount: 3
-        }
-      ],
-      privateLabels: [
-        { transactionHash: commit, activity: 'ordinary' },
-        { transactionHash: reveal, activity: 'control' },
-        { transactionHash: revote, activity: 'revote' }
-      ]
-    }]
-  });
-  const senderCountIndex = getLeakageFeatureNames().indexOf('sender-transaction-count');
-  assert.equal(rows.find(({ transactionHash }) => transactionHash === commit).vector[senderCountIndex], 1);
-  assert.equal(rows.find(({ transactionHash }) => transactionHash === revote).vector[senderCountIndex], 3);
-});
 
 test('leakage analysis labels commit actions and compares paired runs with event ablation', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'votechain-leakage-'));

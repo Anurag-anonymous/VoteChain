@@ -8,7 +8,6 @@ const {
   createCampaignPlan,
   createRunManifest
 } = require('../../../backend/src/config/researchStudy');
-const { cumulativeSenderCounts } = require('./transaction-metadata');
 const { createScenario } = require('./scenario');
 const { verifyPublicLedger } = require('./auditor');
 
@@ -343,7 +342,10 @@ const retrieveLedger = async ({ web3, contract, fromBlock, toBlock, labels, oper
     left.blockNumber - right.blockNumber ||
     left.transactionIndex - right.transactionIndex
   ));
-  const senderCounts = cumulativeSenderCounts(publicRecords, 'ledger');
+  const senderCounts = new Map();
+  publicRecords.forEach(({ submitter }) => {
+    senderCounts.set(submitter, (senderCounts.get(submitter) || 0) + 1);
+  });
   for (let index = 0; index < publicRecords.length; index += 1) {
     const current = publicRecords[index];
     const previous = publicRecords[index - 1];
@@ -353,7 +355,7 @@ const retrieveLedger = async ({ web3, contract, fromBlock, toBlock, labels, oper
     current.blockInterval = previous
       ? Math.max(0, current.blockNumber - previous.blockNumber)
       : 0;
-    current.senderTransactionCount = senderCounts.get(current.transactionHash.toLowerCase());
+    current.senderTransactionCount = senderCounts.get(current.submitter);
   }
   const privateLabels = publicRecords.map(({ transactionHash }) => ({
     transactionHash,

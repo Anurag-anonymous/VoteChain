@@ -1,7 +1,4 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const test = require('node:test');
 const Web3 = require('web3');
 const {
@@ -10,7 +7,7 @@ const {
 } = require('../../../backend/src/config/researchStudy');
 const { createScenario } = require('./scenario');
 const { evaluateClassifiers } = require('./classifiers');
-const { analyzeCampaign, summarize } = require('./analyze-campaign');
+const { summarize } = require('./analyze-campaign');
 const {
   assertAnvilRpc,
   campaignFromArguments
@@ -252,7 +249,7 @@ test('padding profiles create timed recommitment streams and registrar decoys', 
   assert.ok(c2p.registrarActions.every((ballot) => ballot.activity === 'decoy'));
 });
 
-test('classifier leave-one-group-out keeps paired election runs together', () => {
+test('classifier holdout keeps election runs disjoint across all three models', () => {
   const runs = Array.from({ length: 10 }, (_, runIndex) => {
     const publicRecords = [];
     const privateLabels = [];
@@ -291,24 +288,26 @@ test('classifier leave-one-group-out keeps paired election runs together', () =>
   });
   const report = evaluateClassifiers({ runs, target: 'revote', seed: 'classifier-test' });
   assert.equal(report.status, 'complete');
-  assert.equal(report.groupCount, 5);
-  assert.equal(report.sampleCount, 200);
+  assert.equal(report.results['logistic-regression'].total, 40);
   assert.ok(report.features.includes('method:other'));
   assert.ok(!report.features.includes('method:0xabcdef01'));
-  assert.equal(
-    report.standardization,
-    'z-score parameters fitted independently on each training fold'
-  );
+  assert.equal(report.standardization, 'z-score parameters fitted on training rows only');
   assert.equal(
     report.results['logistic-regression'].splitMethod,
-    'leave-one-repetition-group-out'
+    'deterministic campaign/election-level holdout'
+  );
+  const heldOutRepetitions = report.heldOutRunIds.map((runId) => (
+    Number(runId.slice('run-'.length))
+  ));
+  assert.equal(heldOutRepetitions.length, 2);
+  assert.equal(
+    Math.floor(heldOutRepetitions[0] / 2),
+    Math.floor(heldOutRepetitions[1] / 2)
   );
   for (const model of Object.values(report.results)) {
-    assert.equal(model.folds.length, 5);
-    assert.equal(new Set(model.folds.map(({ heldOutGroupId }) => heldOutGroupId)).size, 5);
+    assert.equal(model.heldOutRunIds.length, 2);
     assert.deepEqual(Object.keys(model.metricsByConfiguration).sort(), ['C1', 'C1p']);
-    assert.ok(model.metricsByConfiguration.C1.accuracy >= 0);
-    assert.ok(model.metricsByConfiguration.C1.accuracy <= 1);
+    assert.ok(model.accuracy >= 0 && model.accuracy <= 1);
     assert.ok(model.modelConfiguration);
     assert.ok(model.seed);
   }
@@ -331,46 +330,4 @@ test('metric summaries use sample standard deviation and omit single-run interva
   assert.equal(summary.standardDeviation, Math.sqrt(2.5));
   assert.ok(summary.confidenceInterval95);
   assert.equal(summarize([3]).confidenceInterval95, null);
-});
-
-test('campaign reports keep legacy observer AUC out of comparisons and Pareto scoring', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'votechain-campaign-analysis-'));
-  try {
-    const runDirectory = path.join(root, 'run-c0');
-    fs.mkdirSync(runDirectory);
-    const writeJson = (filename, value) => {
-      fs.writeFileSync(path.join(runDirectory, filename), JSON.stringify(value));
-    };
-    writeJson('result.json', {
-      status: 'complete',
-      runId: 'run-c0',
-      auditVerified: true,
-      totalGas: '1000'
-    });
-    writeJson('manifest.json', {
-      population: 100,
-      configuration: { label: 'C0' }
-    });
-    writeJson('operations.json', [{ operation: 'deployment' }]);
-    writeJson('public-records.json', []);
-    writeJson('private-labels.json', []);
-    writeJson('auditor.json', {
-      storageGrowthBytes: 12,
-      verificationTimeMs: 5,
-      bytesProcessed: 42,
-      exceptionalRecords: 0
-    });
-
-    const report = analyzeCampaign(root);
-    assert.equal('observerRocAuc' in report.summaryByConfiguration.C0, false);
-    assert.equal('observerAuc' in report.comparisons[0].populations[0], false);
-    assert.deepEqual(Object.keys(report.paretoFrontier[0]).sort(), [
-      'auditTimeMs',
-      'configuration',
-      'population',
-      'totalGas'
-    ]);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
 });

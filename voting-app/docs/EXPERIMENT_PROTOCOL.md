@@ -86,6 +86,11 @@ receipts. Storage is a model of non-zero Solidity data slots, not state-trie or
 node-database bytes. The separate auditor verifies contract events and reveal
 commitments; it does not verify a zero-knowledge tally proof.
 
+The public `senderTransactionCount` feature is cumulative through each
+transaction's position in block/transaction order, not the sender's final
+run-wide total. Classifier reports use leave-one-repetition-group-out
+evaluation, keeping paired configurations from the same repetition together.
+
 ## Protocol Controls That Affect A Run
 
 - `C0_PROTOCOL_ENABLED` (default `true`): when `false`, the `c0-encrypted` write

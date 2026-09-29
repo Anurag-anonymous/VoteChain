@@ -1,10 +1,6 @@
 const crypto = require('crypto');
 const Web3 = require('web3');
 const { calculateBinaryMetrics } = require('../../../backend/src/services/experiments/ObserverAccuracy');
-const {
-  orderByTransaction,
-  cumulativeSenderCounts
-} = require('./transaction-metadata');
 const web3 = new Web3();
 const METHOD_IDS = [
   ...[
@@ -100,10 +96,15 @@ const makeFeatureRows = (runs, target) => {
       }
       labelMap.set(label.transactionHash.toLowerCase(), label);
     }
-    const senderCounts = cumulativeSenderCounts(publicRecords, runId);
-    const orderedRecords = orderByTransaction(publicRecords);
-    const count = orderedRecords.length;
-    const featureRows = orderedRecords.map((record, index) => {
+    const senderCounts = new Map();
+    publicRecords.forEach(({ submitter }) => {
+      if (typeof submitter !== 'string' || !submitter) {
+        throw new Error(`Run ${runId} has an invalid public-record submitter`);
+      }
+      senderCounts.set(submitter, (senderCounts.get(submitter) || 0) + 1);
+    });
+    const count = publicRecords.length;
+    const featureRows = publicRecords.map((record, index) => {
       if (typeof record.transactionHash !== 'string' ||
           !/^0x[0-9a-f]{64}$/i.test(record.transactionHash)) {
         throw new Error(`Run ${runId} has an invalid public-record transaction hash`);
@@ -142,7 +143,7 @@ const makeFeatureRows = (runs, target) => {
         numericFeatures.calldataBytes,
         numericFeatures.interTransactionSeconds,
         numericFeatures.blockInterval,
-        Math.log1p(senderCounts.get(record.transactionHash.toLowerCase()) || 0),
+        Math.log1p(senderCounts.get(record.submitter) || 0),
         count < 2 ? 0 : index / (count - 1)
       ];
       const methodFeatures = Array(methodIds.length).fill(0);
@@ -176,6 +177,50 @@ const makeFeatureRows = (runs, target) => {
     ];
   });
   return labelsByRun.flat();
+};
+
+const splitByCampaignGroup = (samples, seed) => {
+  const groupsByConfiguration = new Map();
+  for (const sample of samples) {
+    if (!groupsByConfiguration.has(sample.configuration)) {
+      groupsByConfiguration.set(sample.configuration, new Set());
+    }
+    groupsByConfiguration.get(sample.configuration).add(sample.groupId);
+  }
+  const testGroupIds = new Set();
+  for (const [configuration, configurationGroupSet] of groupsByConfiguration) {
+    const groupIds = [...configurationGroupSet].sort((left, right) => (
+      crypto.createHash('sha256').update(`${seed}:${configuration}:${left}`).digest('hex')
+        .localeCompare(crypto.createHash('sha256')
+          .update(`${seed}:${configuration}:${right}`)
+          .digest('hex'))
+    ));
+    if (groupIds.length < 2) {
+      return {
+        error: `At least two independent campaign/election groups are required for ${configuration}`
+      };
+    }
+    const testCount = Math.min(
+      groupIds.length - 1,
+      Math.max(1, Math.ceil(groupIds.length * 0.2))
+    );
+    groupIds.slice(0, testCount).forEach((groupId) => testGroupIds.add(groupId));
+  }
+  if (testGroupIds.size === 0) {
+    return { error: 'At least two independent campaign/election groups are required for held-out evaluation' };
+  }
+  const training = samples.filter(({ groupId }) => !testGroupIds.has(groupId));
+  const test = samples.filter(({ groupId }) => testGroupIds.has(groupId));
+  if (!training.some(({ actual }) => actual) ||
+      !training.some(({ actual }) => !actual) ||
+      !test.some(({ actual }) => actual) ||
+      !test.some(({ actual }) => !actual)) {
+    return {
+      error: 'Campaign/election-level split does not contain both classes in train and test; collect more independent runs'
+    };
+  }
+  const testRunIds = [...new Set(test.map(({ runId }) => runId))];
+  return { training, test, testRunIds };
 };
 
 const normalizeTraining = (training) => {
@@ -353,7 +398,6 @@ const makeCommitFeatureRows = ({ runs, target, featureView = 'full' }) => {
       }
       publicByHash.set(record.transactionHash.toLowerCase(), record);
     }
-    const senderCounts = cumulativeSenderCounts(publicRecords, runId);
     const labelsByHash = new Map();
     for (const label of privateLabels) {
       if (typeof label.transactionHash !== 'string' ||
@@ -392,7 +436,7 @@ const makeCommitFeatureRows = ({ runs, target, featureView = 'full' }) => {
         blockInterval: Number(record.blockInterval),
         gasUsed: Number(operation.gasUsed || record.gasUsed),
         calldataBytes: Number(operation.calldataBytes || record.calldataBytes),
-        senderTransactionCount: Number(senderCounts.get(hash)),
+        senderTransactionCount: Number(record.senderTransactionCount),
         transactionIndex: Number(record.transactionIndex),
         blockNumber: Number(record.blockNumber)
       };
@@ -548,7 +592,6 @@ const evaluateLeaveOneGroupOut = ({ samples, configurations, seed }) => {
     );
     results[name] = {
       modelConfiguration: MODEL_CONFIGURATIONS[name],
-      seed: `${seed}:${name}`,
       metricsByConfiguration,
       meanPerFoldMetricsByConfiguration: foldMeansByConfiguration,
       folds: foldReports,
@@ -582,16 +625,66 @@ const evaluateLeaveOneGroupOut = ({ samples, configurations, seed }) => {
 
 const evaluateClassifiers = ({ runs, target, seed }) => {
   const samples = makeFeatureRows(runs, target);
-  const configurations = [...new Set(runs.map(({ configuration }) => configuration))]
-    .sort();
-  const evaluation = evaluateLeaveOneGroupOut({ samples, configurations, seed });
+  const split = splitByCampaignGroup(samples, seed);
+  if (split.error) {
+    return {
+      status: 'insufficient-independent-runs',
+      target,
+      seed,
+      sampleCount: samples.length,
+      error: split.error
+    };
+  }
+  const normalized = normalizeTraining(split.training);
+  const training = normalized.training;
+  const test = split.test.map((sample) => ({
+    ...sample,
+    vector: normalized.transform(sample.vector)
+  }));
+  const modelFunctions = {
+    'logistic-regression': logisticModel,
+    'decision-tree': decisionTreeModel,
+    'random-forest': forestModel
+  };
+  const results = {};
+  for (const [name, makeModel] of Object.entries(modelFunctions)) {
+    const predictScore = makeModel(training, `${seed}:${name}`);
+    const observations = test.map((sample) => {
+      const score = predictScore(sample.vector);
+      return {
+        score,
+        predicted: score >= 0.5,
+        actual: sample.actual,
+        configuration: sample.configuration
+      };
+    });
+    const metricsByConfiguration = Object.fromEntries(
+      [...new Set(observations.map(({ configuration }) => configuration))]
+        .map((configuration) => [configuration, calculateBinaryMetrics(
+          observations.filter((observation) => observation.configuration === configuration)
+        )])
+    );
+    results[name] = {
+      ...calculateBinaryMetrics(observations),
+      modelConfiguration: MODEL_CONFIGURATIONS[name],
+      seed: `${seed}:${name}`,
+      metricsByConfiguration,
+      heldOutRunIds: split.testRunIds,
+      splitMethod: 'deterministic campaign/election-level holdout'
+    };
+  }
   return {
+    status: 'complete',
     target,
     seed,
     features: FEATURE_NAMES,
+    sampleCount: samples.length,
     sampling: 'deterministic class-stratified hash sample, capped at 500 per class per run',
-    standardization: 'z-score parameters fitted independently on each training fold',
-    ...evaluation
+    standardization: 'z-score parameters fitted on training rows only',
+    trainingSamples: training.length,
+    testSamples: test.length,
+    heldOutRunIds: split.testRunIds,
+    results
   };
 };
 

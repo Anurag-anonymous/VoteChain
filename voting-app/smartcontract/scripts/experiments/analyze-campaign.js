@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { calculateAccuracy } = require('../../../backend/src/services/experiments/ObserverAccuracy');
 const { evaluateClassifiers } = require('./classifiers');
 
 const T_CRITICAL_95 = [
@@ -66,6 +67,12 @@ const loadCompletedRuns = (campaignRoot) => {
 const metricFor = (run, metric) => {
   if (metric === 'totalGas') return Number(run.result.totalGas);
   if (metric === 'auditTimeMs') return run.audit.verificationTimeMs;
+  if (metric === 'observerRocAuc') {
+    return calculateAccuracy({
+      publicRecords: run.publicRecords,
+      privateLabels: run.privateLabels
+    }).rocAuc;
+  }
   return null;
 };
 
@@ -116,7 +123,7 @@ const buildParetoFrontier = (runs) => {
         manifest.configuration.label === configuration
       ));
       if (!rows.length) continue;
-      const metrics = ['totalGas', 'auditTimeMs'].map((metric) => (
+      const metrics = ['totalGas', 'auditTimeMs', 'observerRocAuc'].map((metric) => (
         summarize(rows.map((run) => metricFor(run, metric)).filter(Number.isFinite))
       ));
       if (metrics.some((metric) => metric === null)) continue;
@@ -124,7 +131,8 @@ const buildParetoFrontier = (runs) => {
         configuration,
         population,
         totalGas: metrics[0].mean,
-        auditTimeMs: metrics[1].mean
+        auditTimeMs: metrics[1].mean,
+        observerRocAuc: metrics[2].mean
       });
     }
   }
@@ -133,8 +141,10 @@ const buildParetoFrontier = (runs) => {
     other.population === candidate.population &&
     other.totalGas <= candidate.totalGas &&
     other.auditTimeMs <= candidate.auditTimeMs &&
+    other.observerRocAuc <= candidate.observerRocAuc &&
     (other.totalGas < candidate.totalGas ||
-      other.auditTimeMs < candidate.auditTimeMs)
+      other.auditTimeMs < candidate.auditTimeMs ||
+      other.observerRocAuc < candidate.observerRocAuc)
   )));
 };
 
@@ -159,6 +169,10 @@ const analyzeCampaign = (campaignRoot) => {
       if (!actionGas[activity]) actionGas[activity] = [];
       actionGas[activity].push(Number(operation.gasUsed));
     }
+    const observer = calculateAccuracy({
+      publicRecords: run.publicRecords,
+      privateLabels: run.privateLabels
+    });
     groups[configuration].push({
       runId: run.result.runId,
       population: run.manifest.population,
@@ -166,6 +180,7 @@ const analyzeCampaign = (campaignRoot) => {
       storageGrowthBytes: run.audit.storageGrowthBytes,
       auditTimeMs: run.audit.verificationTimeMs,
       auditorBytesProcessed: run.audit.bytesProcessed,
+      observer,
       actionGas,
       exceptionRecords: run.audit.exceptionalRecords
     });
@@ -188,6 +203,11 @@ const analyzeCampaign = (campaignRoot) => {
       storageGrowthBytes: summarize(records.map(({ storageGrowthBytes }) => storageGrowthBytes)),
       auditTimeMs: summarize(records.map(({ auditTimeMs }) => auditTimeMs)),
       auditorBytesProcessed: summarize(records.map(({ auditorBytesProcessed }) => auditorBytesProcessed)),
+      observerAccuracy: summarize(records.map(({ observer }) => observer.accuracy)),
+      observerPrecision: summarize(records.map(({ observer }) => observer.precision)),
+      observerRecall: summarize(records.map(({ observer }) => observer.recall)),
+      observerF1: summarize(records.map(({ observer }) => observer.f1)),
+      observerRocAuc: summarize(records.map(({ observer }) => observer.rocAuc).filter(Number.isFinite)),
       exceptionRecords: summarize(records.map(({ exceptionRecords }) => exceptionRecords)),
       gasByAction: perActionGas
     };
@@ -210,7 +230,8 @@ const analyzeCampaign = (campaignRoot) => {
       right,
       populations: populations.map((population) => ({
         totalGas: compareAtPopulation(runs, population, left, right, 'totalGas'),
-        auditTime: compareAtPopulation(runs, population, left, right, 'auditTimeMs')
+        auditTime: compareAtPopulation(runs, population, left, right, 'auditTimeMs'),
+        observerAuc: compareAtPopulation(runs, population, left, right, 'observerRocAuc')
       }))
     });
   }
@@ -271,7 +292,7 @@ const analyzeCampaign = (campaignRoot) => {
     paretoFrontier: buildParetoFrontier(runs),
     classifiers: {
       algorithms: ['logistic-regression', 'decision-tree', 'random-forest'],
-      dataSplit: 'leave-one-repetition-group-out; paired configurations from one repetition are held out together',
+      dataSplit: 'deterministic held-out campaign/election groups; paired configurations from one repetition stay in one partition',
       reports: classifierReports
     }
   };
