@@ -13,7 +13,14 @@ const { evaluateClassifiers } = require('./classifiers');
 const { analyzeCampaign, summarize } = require('./analyze-campaign');
 const {
   assertAnvilRpc,
-  campaignFromArguments
+  campaignFromArguments,
+  privateKeyFromSeed,
+  loadPublicActorKeys,
+  actorAccountIndex,
+  estimateActorGasByAccount,
+  estimateGasLimit,
+  retrieveLedger,
+  runOne
 } = require('./run-campaign');
 
 const web3 = new Web3();
@@ -153,6 +160,216 @@ test('single-profile runner supports repetitions and matrix filtering', () => {
     populations: '1000',
     'revote-rates': '0,10'
   }), /requires a configuration with revote enabled/);
+});
+
+test('ledger retrieval caches blocks and fetches transaction metadata concurrently', async () => {
+  const hashes = Array.from({ length: 10 }, (_, index) => (
+    `0x${index.toString(16).padStart(64, '0')}`
+  ));
+  const blockCalls = new Map();
+  let activeTransactions = 0;
+  let maximumActiveTransactions = 0;
+  const fakeWeb3 = {
+    eth: {
+      getTransaction: async (hash) => {
+        activeTransactions += 1;
+        maximumActiveTransactions = Math.max(
+          maximumActiveTransactions,
+          activeTransactions
+        );
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        activeTransactions -= 1;
+        const index = hashes.indexOf(hash);
+        const blockGroup = Math.floor(index / 3);
+        return {
+          from: '0x0000000000000000000000000000000000000001',
+          to: '0x0000000000000000000000000000000000000002',
+          blockNumber: 100 + blockGroup,
+          transactionIndex: index % 3,
+          input: '0x12345678'
+        };
+      },
+      getTransactionReceipt: async () => ({ gasUsed: 21000 }),
+      getBlock: async (blockNumber) => {
+        blockCalls.set(blockNumber, (blockCalls.get(blockNumber) || 0) + 1);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return { timestamp: 1700000000 + blockNumber };
+      }
+    }
+  };
+  const contract = {
+    getPastEvents: async () => hashes.map((transactionHash) => ({
+      transactionHash,
+      event: 'BallotCommitted'
+    }))
+  };
+  const labels = new Map();
+  const operations = hashes.slice().reverse().map((transactionHash) => ({
+    transactionHash
+  }));
+  const ledger = await retrieveLedger({
+    web3: fakeWeb3,
+    contract,
+    fromBlock: 100,
+    toBlock: 103,
+    labels,
+    operations
+  });
+
+  assert.deepEqual(
+    ledger.publicRecords.map(({ transactionHash }) => transactionHash),
+    hashes
+  );
+  assert.equal(ledger.publicRecords[0].senderTransactionCount, 1);
+  assert.equal(ledger.publicRecords[9].senderTransactionCount, 10);
+  assert.ok(maximumActiveTransactions > 1);
+  assert.ok(maximumActiveTransactions <= 8);
+  assert.deepEqual([...blockCalls.keys()].sort((a, b) => a - b), [100, 101, 102, 103]);
+  assert.ok([...blockCalls.values()].every((count) => count === 1));
+});
+
+test('run recovery reuses completed results and preserves interrupted run markers', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'votechain-run-recovery-'));
+  const run = async (runId) => runOne({
+    web3: null,
+    artifact: null,
+    manifest: { runId, seed: 'recovery-seed', population: 3 },
+    network: 'polygon-amoy',
+    outputRoot: root,
+    concurrency: 1
+  });
+  try {
+    const completed = {
+      status: 'complete',
+      runId: 'complete-run',
+      seed: 'recovery-seed'
+    };
+    const completeDirectory = path.join(root, completed.runId);
+    fs.mkdirSync(completeDirectory);
+    fs.writeFileSync(
+      path.join(completeDirectory, 'result.json'),
+      JSON.stringify(completed)
+    );
+    assert.deepEqual(await run(completed.runId), completed);
+
+    const interrupted = {
+      status: 'running',
+      runId: 'interrupted-run',
+      seed: 'recovery-seed'
+    };
+    const interruptedDirectory = path.join(root, interrupted.runId);
+    fs.mkdirSync(interruptedDirectory);
+    const interruptedResultPath = path.join(interruptedDirectory, 'result.json');
+    fs.writeFileSync(interruptedResultPath, JSON.stringify(interrupted));
+    await assert.rejects(run(interrupted.runId), /already exists but is not complete/);
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(interruptedResultPath, 'utf8')),
+      interrupted
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Amoy smoke plans cover each configuration at a small population', () => {
+  const configurations = ['C0', 'C1', 'C2', 'C3', 'C1p', 'C2p'];
+  const plans = configurations.map((configuration) => campaignFromArguments({
+    network: 'polygon-amoy',
+    configuration,
+    population: '20',
+    repetitions: '1',
+    seed: `amoy-smoke-${configuration}`,
+    'commit-duration': '60',
+    'reveal-duration': '60',
+    ...(configuration.endsWith('p') ? {
+      'padding-rate': '20',
+      'selection-strategy': 'population-sample',
+      'timing-distribution': 'uniform',
+      'timing-window-seconds': '10',
+      'dummy-transactions-per-ballot': '1',
+      'election-population': '20'
+    } : {})
+  }));
+  assert.deepEqual(plans.map(({ plans: [plan] }) => plan.configuration.label), configurations);
+  assert.ok(plans.every(({ network, plans: [plan] }) => (
+    network === 'polygon-amoy' &&
+    plan.network.chainId === 80002 &&
+    plan.population === 20 &&
+    plan.repetitions === 1 &&
+    plan.durationSeconds === 120
+  )));
+});
+
+test('reused Amoy actor pool maps simulated participants and aggregates funding estimates', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'votechain-amoy-actors-'));
+  try {
+    const actorKeys = Array.from({ length: 3 }, (_, index) => (
+      privateKeyFromSeed('amoy-smoke-test-actors', index)
+    ));
+    const keyFile = path.join(root, 'actors.json');
+    fs.writeFileSync(keyFile, JSON.stringify({ accounts: actorKeys }));
+    const plans = [
+      { runId: 'smoke-c0', population: 20 },
+      { runId: 'smoke-c1', population: 20 }
+    ];
+    const keysByRun = loadPublicActorKeys({
+      web3,
+      actorKeyFile: keyFile,
+      plans,
+      administratorAddress: '0x0000000000000000000000000000000000000001',
+      reuseActorKeys: true
+    });
+    assert.deepEqual([...keysByRun.get('smoke-c0')], actorKeys);
+    assert.deepEqual([...keysByRun.get('smoke-c1')], actorKeys);
+    assert.deepEqual(
+      Array.from({ length: 8 }, (_, actor) => actorAccountIndex(actor, 3)),
+      [0, 1, 2, 0, 1, 2, 0, 1]
+    );
+    const gasByAccount = estimateActorGasByAccount([
+      { actor: 0, commits: [{}, {}], reveals: [{}] },
+      { actor: 1, commits: [{}], reveals: [{}] },
+      { actor: 3, commits: [{}], reveals: [] }
+    ], 3);
+    assert.deepEqual(gasByAccount, [900000n, 400000n, 0n]);
+    assert.throws(() => loadPublicActorKeys({
+      web3,
+      actorKeyFile: keyFile,
+      plans,
+      administratorAddress: web3.eth.accounts.privateKeyToAccount(actorKeys[0]).address,
+      reuseActorKeys: true
+    }), /Administrator key must not appear/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('single-account Amoy smoke mode uses administrator key as the sole actor', () => {
+  const adminKey = privateKeyFromSeed('amoy-single-funded-account', 0);
+  const keysByRun = loadPublicActorKeys({
+    web3,
+    plans: [{ runId: 'single-account-smoke', population: 2 }],
+    adminPrivateKey: adminKey,
+    reuseAdminAccount: true
+  });
+  assert.deepEqual(keysByRun.get('single-account-smoke'), [adminKey]);
+  assert.throws(() => loadPublicActorKeys({
+    web3,
+    plans: [{ runId: 'single-account-smoke', population: 1 }],
+    adminPrivateKey: adminKey,
+    reuseAdminAccount: true
+  }), /at least two simulated participants/);
+});
+
+test('estimated transaction gas leaves a bounded safety margin within action limits', async () => {
+  assert.equal(await estimateGasLimit(async () => 234506, 250000, 5), 246232);
+  await assert.rejects(
+    estimateGasLimit(async () => 234506, 250000, 20),
+    /safety margin exceeds/
+  );
+  await assert.rejects(
+    estimateGasLimit(async () => 200000, 250000, 101),
+    /between 0 and 100 percent/
+  );
 });
 
 test('Anvil runner rejects a chain-31337 RPC without Foundry Anvil methods', async () => {

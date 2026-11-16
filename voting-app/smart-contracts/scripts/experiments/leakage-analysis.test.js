@@ -212,9 +212,25 @@ test('leakage analysis labels commit actions and compares paired runs with event
       status: 'running',
       runId: 'incomplete-run'
     }));
+    const smokeManifestPath = path.join(
+      root,
+      'fixture-C1-r1',
+      'manifest.json'
+    );
+    const smokeManifest = JSON.parse(fs.readFileSync(smokeManifestPath, 'utf8'));
+    smokeManifest.provenance = {
+      actorAccountModel: {
+        type: 'single-admin-actor-account',
+        distinctAccounts: 1,
+        simulatedParticipants: 1000
+      }
+    };
+    fs.writeFileSync(smokeManifestPath, JSON.stringify(smokeManifest));
 
     const report = analyzeLeakage({ root, populations: [1000] });
     assert.equal(report.includedCompletedRunCount, 12);
+    assert.ok(report.actorAccountModels.includes('single-admin-actor-account'));
+    assert.match(report.researchInterpretation, /non-representative/);
     assert.equal(report.excludedIncompleteRuns.length, 1);
     assert.equal(report.comparisons.length, 2);
     const [comparison, panicComparison] = report.comparisons;

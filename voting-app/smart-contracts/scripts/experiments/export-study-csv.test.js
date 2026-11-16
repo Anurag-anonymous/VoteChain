@@ -30,10 +30,15 @@ test('exports campaign, run, auditor, public transaction and partial-operation r
       runId: 'run-one',
       seed: 'seed-one',
       configuration: 'C1',
-      population: 2,
+      population: 20,
       totalGas: '90000',
       contractTransactionCount: 1,
-      auditVerified: true
+      auditVerified: true,
+      actorAccountModel: {
+        type: 'reused-smoke-accounts',
+        distinctAccounts: 3,
+        simulatedParticipants: 20
+      }
     });
     writeJson(completeDirectory, 'manifest.json', {
       runId: 'run-one',
@@ -41,7 +46,7 @@ test('exports campaign, run, auditor, public transaction and partial-operation r
       repetition: 1,
       configuration: { label: 'C1' },
       network: { key: 'anvil', chainId: 31337 },
-      population: 2,
+      population: 20,
       electionId: '0xelection',
       revoteRatePercent: 20,
       panicRatePercent: 10,
@@ -116,6 +121,7 @@ test('exports campaign, run, auditor, public transaction and partial-operation r
     assert.equal(rows.filter((row) => row.startsWith('transaction,')).length, 2);
     assert.ok(rows.find((row) => row.startsWith('transaction,')).endsWith(',1'));
     assert.ok(csv.includes('"[""BallotCommitted"",""Test, Event""]"'));
+    assert.ok(csv.includes('reused-smoke-accounts'));
     assert.ok(csv.includes('"{""0"":1}"'));
     assert.ok(csv.includes('PRIVATE_LABEL_SENTINEL') === false);
     assert.ok(csv.includes('PRIVATE_SCENARIO_SENTINEL') === false);

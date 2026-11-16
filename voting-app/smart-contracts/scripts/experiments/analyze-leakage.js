@@ -477,9 +477,23 @@ const analyzeLeakage = ({
       }
     }
   }
+  const actorAccountModels = [...new Set(runs.map(({ manifest }) => (
+    manifest.provenance && manifest.provenance.actorAccountModel
+      ? manifest.provenance.actorAccountModel.type
+      : 'unspecified'
+  )))].sort();
+  const reusedSmokeAccounts = actorAccountModels.some((model) => (
+    ['reused-smoke-accounts', 'single-admin-actor-account'].includes(model)
+  ));
   return {
     schemaVersion: 'votechain-leakage-analysis-v1',
-    evidence: 'completed audited EVM runs; incomplete runs excluded',
+    evidence: reusedSmokeAccounts
+      ? 'functional smoke analysis only: actor accounts were reused; do not interpret as research leakage estimates'
+      : 'completed audited EVM runs; incomplete runs excluded',
+    actorAccountModels,
+    researchInterpretation: reusedSmokeAccounts
+      ? 'non-representative: reused submitter accounts affect sender metadata and leakage scores'
+      : 'use only with the study account-assignment design and all required repetitions',
     dataSplit: 'leave-one-repetition-group-out; each held-out repetition is excluded from both paired configurations during training',
     labelConstruction: {
       revote: 'commit operations only; ordinary activity is 0 and revote activity is 1; padding, panic, and decoy commits excluded',

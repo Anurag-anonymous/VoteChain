@@ -63,10 +63,72 @@ the full campaign and record the selected values.
 ## Polygon Amoy confirmation
 
 Public execution is deliberately opt-in. It requires a funded administrator
-key in `RESEARCH_ADMIN_PRIVATE_KEY` (or
-`POLYGON_DEPLOYER_PRIVATE_KEY`), `POLYGON_RPC_URL`, and a private actor-key
+key in `RESEARCH_ADMIN_PRIVATE_KEY` (or `POLYGON_DEPLOYER_PRIVATE_KEY`) and
+`POLYGON_RPC_URL`. Standard research runs also require a private actor-key
 file supplied with `--actor-keys-file`. Use `--confirm-public-chain` only after
 reviewing the generated plan and estimated cost.
+
+The campaign runner loads `smart-contracts\.env` automatically. For a
+low-cost wiring smoke test, the runner has an explicit
+`--reuse-admin-account` mode that uses one funded account for both contract
+administration and all simulated voter transactions. This requires no separate
+actor-key file and is restricted to Amoy runs with population 2–20 and
+`--concurrency 1`; transactions are serialized to avoid nonce races. The
+administrator signer must be selected explicitly using `--admin-key-env`.
+Example for C0:
+
+```powershell
+npm run experiment:run -- --network polygon-amoy --confirm-public-chain `
+  --configuration C0 --population 3 --repetitions 1 --seed amoy-smoke-C0 `
+  --commit-duration 60 --reveal-duration 60 --admin-key-env PRIVATE_KEY `
+  --reuse-admin-account --concurrency 1
+```
+
+Replace `C0` in the configuration and seed to test `C1`, `C2`, `C3`, `C1p`,
+and `C2p`. Set `--revote-rate 34 --panic-rate 34` for smoke conditions where
+those activities should occur at population 3. For `C1p` and `C2p`, also
+provide the required padding options:
+`--padding-rate 20 --selection-strategy population-sample
+--timing-distribution uniform --timing-window-seconds 10
+--dummy-transactions-per-ballot 1 --election-population 3`. The runner
+validates chain ID 80002 and account funding before deployment. These are real
+public-testnet transactions and consume testnet gas.
+
+`--reuse-actor-keys` remains available for a separate pool of exactly three or
+four funded actor accounts, distinct from the administrator.
+
+The reused-account modes are only functional smoke tests. The one-account mode
+does not model independent voter accounts, and all transactions share one
+public sender. Do not treat its gas, leakage, or activity-rate statistics as
+research results. To check that
+leave-one-repetition-group-out leakage analysis can execute on the testnet
+data, collect two repetitions for each paired profile C1, C1p, C2, and C2p
+(eight runs total, all with the same reused test-account pool and matching
+population, duration, and padding rate), store them under a shared directory,
+then run `experiment:leakage` against that directory with `--population 20`.
+The leakage/activity JSON reports and CSV export retain the actor-account model
+and label reused-account outputs as non-representative smoke analysis.
+
+Example paired-classifier setup for C1 (repeat the command for C1p, C2, and
+C2p, using a distinct output folder for each configuration):
+
+```powershell
+npm run experiment:run -- --network polygon-amoy --confirm-public-chain `
+  --configuration C1 --population 20 --repetitions 2 --seed amoy-smoke-C1 `
+  --commit-duration 60 --reveal-duration 60 --admin-key-env PRIVATE_KEY `
+  --reuse-admin-account --concurrency 1 `
+  --output research-runs\amoy-smoke\C1
+```
+
+The paired classifier check requires population >= 3 so positive and negative
+labels can coexist at the default mechanism rates; one-account runs still
+produce non-representative smoke metrics. Add the padded-profile options
+shown above for C1p and C2p. After all four
+profiles complete, run:
+
+```powershell
+npm run experiment:leakage -- research-runs\amoy-smoke --population 20
+```
 
 The full 42-run Amoy matrix requires **40,000 fresh, funded actor keys** to
 match the manuscript's fresh-account-per-run control. The key file can be a
@@ -102,6 +164,15 @@ Git-ignored because it contains private ground-truth labels. Each completed
 run has a manifest, operation receipts, public records, private labels and
 scenario counts in separate files, and the runner's auditor result. To rerun
 the audit as a separate process against the same RPC:
+
+Ledger reconstruction fetches transaction and receipt metadata with bounded
+concurrency and caches block responses by block number, so multiple
+transactions in one block share a single block RPC request.
+Each run result and its manifest include wall-clock durations for deployment,
+commit, reveal, ledger reconstruction, audit, and the full run. `campaign.json`
+is atomically checkpointed after each completed run; a retry can reuse a
+completed run, while an interrupted or failed run directory is preserved and
+must be inspected rather than automatically resubmitted.
 
 ```powershell
 npm run experiment:audit -- research-runs\anvil\paper-anvil\<run-id>

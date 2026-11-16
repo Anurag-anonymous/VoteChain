@@ -12,6 +12,7 @@ const COLUMNS = [
   'campaign_completed_runs',
   'run_id',
   'run_status',
+  'actor_account_model',
   'configuration',
   'repetition',
   'population',
@@ -153,6 +154,7 @@ const campaignRow = (root, filePath, campaign) => ({
   campaign_status: campaign.status,
   campaign_expected_runs: campaign.expectedRuns,
   campaign_completed_runs: campaign.completedRuns,
+  actor_account_model: campaign.actorAccountModel,
   started_at: campaign.startedAt,
   completed_at: campaign.completedAt,
   error: campaign.error && campaign.error.message
@@ -187,6 +189,9 @@ const runFields = ({ root, resultPath, result, manifest, audit }) => {
     campaign_path: campaignPathFor(root, directory),
     run_id: result.runId,
     run_status: result.status,
+    actor_account_model: result.actorAccountModel ||
+      provenance.actorAccountModel ||
+      (manifest && manifest.provenance && manifest.provenance.actorAccountModel),
     configuration: result.configuration ||
       (manifest && manifest.configuration && manifest.configuration.label),
     repetition: manifest && manifest.repetition,

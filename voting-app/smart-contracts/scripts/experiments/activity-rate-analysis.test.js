@@ -104,6 +104,21 @@ test('activity-rate analysis pairs repetitions and reports costs, counts, and co
     }
     const copiedCampaignPath = path.join(root, 'revote-sweep-copy');
     fs.cpSync(path.join(root, 'revote-sweep'), copiedCampaignPath, { recursive: true });
+    const smokeManifestPath = path.join(
+      root,
+      'revote-sweep',
+      'fixture-revote-0-1',
+      'manifest.json'
+    );
+    const smokeManifest = JSON.parse(fs.readFileSync(smokeManifestPath, 'utf8'));
+    smokeManifest.provenance = {
+      actorAccountModel: {
+        type: 'single-admin-actor-account',
+        distinctAccounts: 1,
+        simulatedParticipants: 100
+      }
+    };
+    fs.writeFileSync(smokeManifestPath, JSON.stringify(smokeManifest));
     for (const rate of [0, 20, 40]) {
       for (let repetition = 1; repetition <= 3; repetition += 1) {
         const resultPath = path.join(
@@ -128,6 +143,8 @@ test('activity-rate analysis pairs repetitions and reports costs, counts, and co
       mechanism: 'both'
     });
     assert.equal(report.sweeps.length, 3);
+    assert.ok(report.actorAccountModels.includes('single-admin-actor-account'));
+    assert.match(report.researchInterpretation, /non-representative/);
     assert.equal(report.includedCompletedRunCount, 27);
     assert.deepEqual(report.excludedIncompleteRuns, [{
       runId: 'incomplete-run',

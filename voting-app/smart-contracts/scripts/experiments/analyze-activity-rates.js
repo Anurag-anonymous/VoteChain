@@ -341,9 +341,23 @@ const analyzeActivityRates = ({ root, population = 1000, mechanism = 'both' }) =
       `No multi-rate revote/panic sweeps found for population ${population} under ${absoluteRoot}`
     );
   }
+  const actorAccountModels = [...new Set(runs.map(({ manifest }) => (
+    manifest.provenance && manifest.provenance.actorAccountModel
+      ? manifest.provenance.actorAccountModel.type
+      : 'unspecified'
+  )))].sort();
+  const reusedSmokeAccounts = actorAccountModels.some((model) => (
+    ['reused-smoke-accounts', 'single-admin-actor-account'].includes(model)
+  ));
   return {
     schemaVersion: 'votechain-activity-rate-analysis-v1',
-    evidence: 'completed auditor-verified EVM runs only; incomplete runs excluded',
+    evidence: reusedSmokeAccounts
+      ? 'functional smoke analysis only: actor accounts were reused; do not interpret as research activity-rate estimates'
+      : 'completed auditor-verified EVM runs only; incomplete runs excluded',
+    actorAccountModels,
+    researchInterpretation: reusedSmokeAccounts
+      ? 'non-representative: reused submitter accounts affect public sender metadata and transaction sequencing'
+      : 'use only with the study account-assignment design and all required repetitions',
     population,
     leakageEvaluation: 'leave-one-repetition-group-out cross-validation',
     metrics: METRICS,

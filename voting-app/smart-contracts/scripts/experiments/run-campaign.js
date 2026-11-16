@@ -4,6 +4,7 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const Web3 = require('web3');
+require('dotenv').config({ path: path.resolve(__dirname, '../..', '.env') });
 const {
   createCampaignPlan,
   createRunManifest
@@ -16,6 +17,7 @@ const COMMIT_GAS = 250000;
 const REVEAL_GAS = 150000;
 const ADMIN_GAS = 500000;
 const DEPLOY_GAS = 8000000;
+const LEDGER_RETRIEVAL_CONCURRENCY = 8;
 const SECP256K1_ORDER = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
 
 const parseArguments = (argv) => {
@@ -26,7 +28,9 @@ const parseArguments = (argv) => {
     const separator = argument.indexOf('=');
     const name = argument.slice(2, separator < 0 ? undefined : separator);
     const inlineValue = separator < 0 ? undefined : argument.slice(separator + 1);
-    if (name === 'confirm-public-chain') {
+    if (name === 'confirm-public-chain' ||
+        name === 'reuse-actor-keys' ||
+        name === 'reuse-admin-account') {
       result[name] = inlineValue === undefined
         ? true
         : inlineValue.toLowerCase() === 'true';
@@ -69,7 +73,9 @@ const validateArgumentNames = (argumentsByName) => {
     'admin-key-env',
     'concurrency',
     'output',
-    'actor-keys-file'
+    'actor-keys-file',
+    'reuse-actor-keys',
+    'reuse-admin-account'
   ]);
   const unknown = Object.keys(argumentsByName).filter((name) => !allowed.has(name));
   if (unknown.length) throw new Error(`Unknown option(s): ${unknown.map((name) => `--${name}`).join(', ')}`);
@@ -192,7 +198,24 @@ const normalizePrivateKey = (value) => {
   return `0x${key.toLowerCase()}`;
 };
 
-const loadPublicActorKeys = ({ web3, actorKeyFile, plans, administratorAddress }) => {
+const loadPublicActorKeys = ({
+  web3,
+  actorKeyFile,
+  plans,
+  administratorAddress,
+  reuseActorKeys = false,
+  reuseAdminAccount = false,
+  adminPrivateKey
+}) => {
+  if (reuseAdminAccount) {
+    if (!adminPrivateKey || plans.some(({ population }) => population < 2)) {
+      throw new Error(
+        '--reuse-admin-account requires an administrator key and at least two simulated participants'
+      );
+    }
+    const keys = [normalizePrivateKey(adminPrivateKey)];
+    return new Map(plans.map(({ runId }) => [runId, keys]));
+  }
   if (!actorKeyFile) {
     throw new Error('Polygon Amoy runs require --actor-keys-file with funded private keys');
   }
@@ -203,6 +226,30 @@ const loadPublicActorKeys = ({ web3, actorKeyFile, plans, administratorAddress }
     : parsed && Array.isArray(parsed.accounts)
       ? parsed.accounts
       : null;
+  if (reuseActorKeys) {
+    if (runKeys || !flatKeys || ![3, 4].includes(flatKeys.length)) {
+      throw new Error(
+        '--reuse-actor-keys requires a flat actor-key array or { "accounts": [...] } ' +
+        'containing exactly 3 or 4 keys'
+      );
+    }
+    if (plans.some(({ population }) => population <= flatKeys.length)) {
+      throw new Error('--reuse-actor-keys requires more simulated participants than actor accounts');
+    }
+    const keys = flatKeys.map(normalizePrivateKey);
+    const addresses = keys.map((privateKey) => (
+      web3.eth.accounts.privateKeyToAccount(privateKey).address.toLowerCase()
+    ));
+    if (new Set(addresses).size !== keys.length) {
+      throw new Error('Reused actor key pool must contain unique accounts');
+    }
+    if (administratorAddress &&
+        addresses.includes(administratorAddress.toLowerCase())) {
+      throw new Error('Administrator key must not appear in the public actor key file');
+    }
+    return new Map(plans.map(({ runId }) => [runId, keys]));
+  }
+
   const actorKeysByRun = new Map();
   let offset = 0;
   const allAddresses = new Set();
@@ -230,6 +277,35 @@ const loadPublicActorKeys = ({ web3, actorKeyFile, plans, administratorAddress }
     if (!runKeys) offset += manifest.population;
   }
   return actorKeysByRun;
+};
+
+const actorAccountIndex = (actorIndex, accountCount) => actorIndex % accountCount;
+
+const estimateActorGasByAccount = (actorPlans, accountCount) => {
+  const gasByAccount = Array(accountCount).fill(0n);
+  for (const actorPlan of actorPlans) {
+    const index = actorAccountIndex(actorPlan.actor, accountCount);
+    gasByAccount[index] += BigInt(actorPlan.commits.length) * BigInt(COMMIT_GAS) +
+      BigInt(actorPlan.reveals.length) * BigInt(REVEAL_GAS);
+  }
+  return gasByAccount;
+};
+
+const estimateGasLimit = async (estimate, maximumGas, safetyPercent = 20) => {
+  const estimatedGas = BigInt(await estimate());
+  if (!Number.isInteger(safetyPercent) || safetyPercent < 0 || safetyPercent > 100) {
+    throw new Error('Gas safety margin must be an integer between 0 and 100 percent');
+  }
+  if (estimatedGas < 1n || estimatedGas > BigInt(maximumGas)) {
+    throw new Error(`Estimated transaction gas is outside the allowed limit of ${maximumGas}`);
+  }
+  const bufferedGas = (
+    estimatedGas * BigInt(100 + safetyPercent) + 99n
+  ) / 100n;
+  if (bufferedGas > BigInt(maximumGas)) {
+    throw new Error(`Estimated transaction gas plus safety margin exceeds ${maximumGas}`);
+  }
+  return Number(bufferedGas);
 };
 
 const invoke = async ({
@@ -279,13 +355,20 @@ const sendAction = async ({
   if (operation === 'commit' && ballot.delayMs > 0) {
     await waitUntil(commitWallClockStart + ballot.delayMs);
   }
+  const sender = fromAddress ||
+    web3.eth.accounts.privateKeyToAccount(privateKey).address;
+  const gas = await estimateGasLimit(
+    () => method.estimateGas({ from: sender }),
+    operation === 'commit' ? COMMIT_GAS : REVEAL_GAS,
+    5
+  );
   const receipt = await invoke({
     web3,
     method,
-    from: fromAddress || web3.eth.accounts.privateKeyToAccount(privateKey).address,
+    from: sender,
     privateKey,
     to: contract.options.address,
-    gas: operation === 'commit' ? COMMIT_GAS : REVEAL_GAS,
+    gas,
     gasPrice
   });
   const activity = ballot.activity;
@@ -316,17 +399,32 @@ const retrieveLedger = async ({ web3, contract, fromBlock, toBlock, labels, oper
     if (!byTransaction.has(hash)) byTransaction.set(hash, []);
     byTransaction.get(hash).push(event.event);
   }
-  const publicRecords = [];
   const orderedHashes = [...new Set(operations.map(({ transactionHash }) => (
     transactionHash.toLowerCase()
   )))];
-  for (const transactionHash of orderedHashes) {
+  const publicRecords = Array(orderedHashes.length);
+  const blockCache = new Map();
+  const getBlockCached = (blockNumber) => {
+    const key = Number(blockNumber);
+    if (!blockCache.has(key)) {
+      blockCache.set(key, web3.eth.getBlock(key));
+    }
+    return blockCache.get(key);
+  };
+  await workerPool(orderedHashes, LEDGER_RETRIEVAL_CONCURRENCY, async (
+    transactionHash,
+    index
+  ) => {
     const [transaction, receipt] = await Promise.all([
       web3.eth.getTransaction(transactionHash),
       web3.eth.getTransactionReceipt(transactionHash)
     ]);
-    const block = await web3.eth.getBlock(transaction.blockNumber);
-    publicRecords.push({
+    if (!transaction || !receipt) {
+      throw new Error(`Unable to retrieve transaction or receipt for ${transactionHash}`);
+    }
+    const block = await getBlockCached(transaction.blockNumber);
+    if (!block) throw new Error(`Unable to retrieve block ${transaction.blockNumber}`);
+    publicRecords[index] = {
       transactionHash,
       submitter: transaction.from,
       recipient: transaction.to || receipt.contractAddress,
@@ -337,8 +435,8 @@ const retrieveLedger = async ({ web3, contract, fromBlock, toBlock, labels, oper
       calldataBytes: (transaction.input.length - 2) / 2,
       methodId: transaction.input.slice(0, 10),
       eventNames: [...new Set(byTransaction.get(transactionHash) || [])].sort()
-    });
-  }
+    };
+  });
   publicRecords.sort((left, right) => (
     left.blockNumber - right.blockNumber ||
     left.transactionIndex - right.transactionIndex
@@ -397,11 +495,27 @@ const runOne = async ({
   network,
   outputRoot,
   actorKeys,
+  reuseActorKeys = false,
+  reuseAdminAccount = false,
   adminPrivateKey,
   concurrency
 }) => {
   const runDirectory = path.join(outputRoot, manifest.runId);
   const resultPath = path.join(runDirectory, 'result.json');
+  const runStartedAt = new Date().toISOString();
+  const runStartedClock = process.hrtime.bigint();
+  const runtimeBreakdown = {};
+  let currentRuntimePhase = null;
+  const startRuntimePhase = (name) => {
+    currentRuntimePhase = { name, startedAt: process.hrtime.bigint() };
+  };
+  const finishRuntimePhase = () => {
+    if (!currentRuntimePhase) return;
+    runtimeBreakdown[currentRuntimePhase.name] = Number(
+      process.hrtime.bigint() - currentRuntimePhase.startedAt
+    ) / 1e6;
+    currentRuntimePhase = null;
+  };
   if (fs.existsSync(resultPath)) {
     const existing = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
     if (existing.status === 'complete' && existing.seed === manifest.seed) {
@@ -414,7 +528,18 @@ const runOne = async ({
     status: 'running',
     runId: manifest.runId,
     seed: manifest.seed,
-    startedAt: new Date().toISOString()
+    actorAccountModel: reuseActorKeys
+      ? {
+        type: reuseAdminAccount ? 'single-admin-actor-account' : 'reused-smoke-accounts',
+        distinctAccounts: actorKeys.length,
+        simulatedParticipants: manifest.population
+      }
+      : {
+        type: 'one-account-per-participant',
+        distinctAccounts: manifest.population,
+        simulatedParticipants: manifest.population
+      },
+        startedAt: runStartedAt
   });
 
   const operations = [];
@@ -430,6 +555,16 @@ const runOne = async ({
       privateKeyFromSeed(manifest.seed, index)
     ));
     const actors = keys.map((privateKey) => web3.eth.accounts.privateKeyToAccount(privateKey));
+    const accountReuse = reuseActorKeys;
+    if (accountReuse && (
+      network !== 'polygon-amoy' ||
+      manifest.population > 20 ||
+      concurrency !== 1
+    )) {
+      throw new Error(
+        'Reused Amoy actor accounts are restricted to population <= 20 and concurrency 1'
+      );
+    }
     if (new Set(actors.map(({ address }) => address.toLowerCase())).size !== actors.length) {
       throw new Error('Actor private keys must resolve to unique addresses');
     }
@@ -440,11 +575,32 @@ const runOne = async ({
       ? adminAccount.address
       : (await web3.eth.getAccounts())[0];
     if (!adminAddress) throw new Error('RPC returned no administrator account');
-    if (actors.some(({ address }) => address.toLowerCase() === adminAddress.toLowerCase())) {
+    const adminIsActor = actors.some(({ address }) => (
+      address.toLowerCase() === adminAddress.toLowerCase()
+    ));
+    if (adminIsActor && !(
+      reuseAdminAccount &&
+      actors.length === 1 &&
+      actors[0].address.toLowerCase() === adminAddress.toLowerCase()
+    )) {
       throw new Error('Administrator key must not be reused as a voter actor key');
     }
     const scenario = createScenario(manifest, web3);
     const gasPrice = await web3.eth.getGasPrice();
+    const deploy = new web3.eth.Contract(artifact.abi).deploy({
+      data: artifact.bytecode,
+      arguments: [
+        manifest.electionId,
+        manifest.configuration.revoting,
+        manifest.commitDurationSeconds,
+        manifest.revealDurationSeconds
+      ]
+    });
+    const deploymentData = deploy.encodeABI();
+    const deploymentGas = await estimateGasLimit(
+      () => deploy.estimateGas({ from: adminAddress }),
+      DEPLOY_GAS
+    );
     if (network === 'anvil') {
       const initialBalance = BigInt(web3.utils.toWei('100', 'ether')).toString(16);
       await workerPool(actors, concurrency, async ({ address }) => {
@@ -468,19 +624,25 @@ const runOne = async ({
         }
       });
     } else {
-      const registrarGas = DEPLOY_GAS + (4 * ADMIN_GAS) +
+      const registrarGas = deploymentGas + (3 * 100000) +
         scenario.registrarActions.length * COMMIT_GAS;
       const administratorBalance = BigInt(await web3.eth.getBalance(adminAddress));
-      if (administratorBalance < BigInt(gasPrice) * BigInt(registrarGas)) {
-        throw new Error('Administrator account lacks funds for deployment, controls, and registrar actions');
+      const perActorGas = estimateActorGasByAccount(scenario.actorPlans, actors.length);
+      const actorGas = perActorGas.reduce((sum, value) => sum + value, 0n);
+      const totalAdministratorGas = registrarGas + (
+        adminIsActor ? Number(actorGas) : 0
+      );
+      if (administratorBalance < BigInt(gasPrice) * BigInt(totalAdministratorGas)) {
+        throw new Error(
+          'Administrator account lacks funds for the estimated deployment, controls, ' +
+          'registrar actions, and any voter transactions using the same account'
+        );
       }
-      const perActorGas = scenario.actorPlans.map((actorPlan) => (
-        actorPlan.commits.length * COMMIT_GAS + actorPlan.reveals.length * REVEAL_GAS
-      ));
       const insufficient = [];
       for (let index = 0; index < actors.length; index += 1) {
+        if (adminIsActor) continue;
         const balance = BigInt(await web3.eth.getBalance(actors[index].address));
-        const required = BigInt(gasPrice) * BigInt(perActorGas[index]);
+        const required = BigInt(gasPrice) * perActorGas[index];
         if (balance < required) insufficient.push(actors[index].address);
       }
       if (insufficient.length > 0) {
@@ -491,23 +653,14 @@ const runOne = async ({
       }
     }
 
-    const deploy = new web3.eth.Contract(artifact.abi).deploy({
-      data: artifact.bytecode,
-      arguments: [
-        manifest.electionId,
-        manifest.configuration.revoting,
-        manifest.commitDurationSeconds,
-        manifest.revealDurationSeconds
-      ]
-    });
-    const deploymentData = deploy.encodeABI();
+    startRuntimePhase('deploymentMilliseconds');
     const deployment = await invoke({
       web3,
       method: { encodeABI: () => deploymentData },
       from: adminAddress,
       privateKey: adminAccount && adminAccount.privateKey,
       to: undefined,
-      gas: DEPLOY_GAS,
+      gas: deploymentGas,
       gasPrice
     });
     deploymentRecord = {
@@ -524,15 +677,20 @@ const runOne = async ({
       gasUsed: String(deployment.gasUsed),
       calldataBytes: (deploymentData.length - 2) / 2
     });
+    finishRuntimePhase();
     const sendAdmin = async (name, method) => {
       const data = method.encodeABI();
+      const gas = await estimateGasLimit(
+        () => method.estimateGas({ from: adminAddress }),
+        ADMIN_GAS
+      );
       const receipt = await invoke({
         web3,
         method,
         from: adminAddress,
         privateKey: adminAccount && adminAccount.privateKey,
         to: contract.options.address,
-        gas: ADMIN_GAS,
+        gas,
         gasPrice
       });
       operations.push({
@@ -546,17 +704,20 @@ const runOne = async ({
       return receipt;
     };
 
+    startRuntimePhase('commitPhaseMilliseconds');
     await sendAdmin('start-commit', contract.methods.startCommit());
     const commitStartedAt = await contract.methods.commitStartedAt().call();
     const commitWallClockStart = Date.now();
-    await workerPool(scenario.actorPlans, concurrency, async (actorPlan) => {
+    const actionConcurrency = accountReuse ? 1 : concurrency;
+    await workerPool(scenario.actorPlans, actionConcurrency, async (actorPlan) => {
       for (const ballot of actorPlan.commits) {
+        const accountIndex = actorAccountIndex(actorPlan.actor, actors.length);
         await sendAction({
           web3,
           contract,
-          actor: actorPlan.actor,
+          actor: accountIndex,
           ballot,
-          privateKey: keys[actorPlan.actor],
+          privateKey: keys[accountIndex],
           gasPrice,
           operation: 'commit',
           labels,
@@ -590,15 +751,18 @@ const runOne = async ({
       durationSeconds: manifest.commitDurationSeconds
     });
     await sendAdmin('end-commit', contract.methods.endCommit());
+    finishRuntimePhase();
     const revealStartedAt = await contract.methods.revealStartedAt().call();
-    await workerPool(scenario.actorPlans, concurrency, async (actorPlan) => {
+    startRuntimePhase('revealPhaseMilliseconds');
+    await workerPool(scenario.actorPlans, actionConcurrency, async (actorPlan) => {
       for (const ballot of actorPlan.reveals) {
+        const accountIndex = actorAccountIndex(actorPlan.actor, actors.length);
         await sendAction({
           web3,
           contract,
-          actor: actorPlan.actor,
+          actor: accountIndex,
           ballot,
-          privateKey: keys[actorPlan.actor],
+          privateKey: keys[accountIndex],
           gasPrice,
           operation: 'reveal',
           labels,
@@ -613,8 +777,10 @@ const runOne = async ({
       durationSeconds: manifest.revealDurationSeconds
     });
     await sendAdmin('finalize', contract.methods.finalize());
+    finishRuntimePhase();
 
     const finalBlock = await web3.eth.getBlockNumber();
+    startRuntimePhase('ledgerRetrievalMilliseconds');
     const ledger = await retrieveLedger({
       web3,
       contract,
@@ -623,12 +789,18 @@ const runOne = async ({
       labels,
       operations
     });
+    finishRuntimePhase();
+    startRuntimePhase('auditMilliseconds');
     const audit = await verifyPublicLedger({
       web3,
       contract,
       fromBlock: Number(deployment.blockNumber),
       toBlock: finalBlock
     });
+    finishRuntimePhase();
+    runtimeBreakdown.totalMilliseconds = Number(
+      process.hrtime.bigint() - runStartedClock
+    ) / 1e6;
     const runManifest = {
       ...manifest,
       provenance: {
@@ -640,8 +812,16 @@ const runOne = async ({
         deploymentTransaction: deployment.transactionHash,
         startBlock: Number(deployment.blockNumber),
         endBlock: finalBlock,
-        startedAt: new Date().toISOString(),
-        actorPrivateKeysPersisted: false
+        startedAt: runStartedAt,
+        runtimeBreakdown,
+        actorPrivateKeysPersisted: false,
+        actorAccountModel: {
+          type: reuseAdminAccount
+            ? 'single-admin-actor-account'
+            : (accountReuse ? 'reused-smoke-accounts' : 'one-account-per-participant'),
+          distinctAccounts: actors.length,
+          simulatedParticipants: manifest.population
+        }
       }
     };
     const totalGas = operations.reduce((sum, operation) => sum + BigInt(operation.gasUsed), 0n);
@@ -651,11 +831,13 @@ const runOne = async ({
       seed: manifest.seed,
       configuration: manifest.configuration.label,
       population: manifest.population,
+      actorAccountModel: runManifest.provenance.actorAccountModel,
       contractAddress: contract.options.address,
       totalGas: totalGas.toString(),
       contractTransactionCount: ledger.publicRecords.length,
       auditVerified: audit.verified,
-      startedAt: JSON.parse(fs.readFileSync(resultPath, 'utf8')).startedAt,
+      runtimeBreakdown,
+      startedAt: runStartedAt,
       completedAt: new Date().toISOString()
     };
     atomicWriteJson(path.join(runDirectory, 'manifest.json'), runManifest);
@@ -667,6 +849,10 @@ const runOne = async ({
     atomicWriteJson(resultPath, completed);
     return completed;
   } catch (error) {
+    if (currentRuntimePhase) finishRuntimePhase();
+    runtimeBreakdown.totalMilliseconds = Number(
+      process.hrtime.bigint() - runStartedClock
+    ) / 1e6;
     if (operations.length) {
       atomicWriteJson(path.join(runDirectory, 'partial-operations.json'), operations);
     }
@@ -682,7 +868,19 @@ const runOne = async ({
       status: 'failed',
       runId: manifest.runId,
       seed: manifest.seed,
+      actorAccountModel: reuseActorKeys
+        ? {
+          type: reuseAdminAccount ? 'single-admin-actor-account' : 'reused-smoke-accounts',
+          distinctAccounts: reuseAdminAccount ? 1 : actorKeys.length,
+          simulatedParticipants: manifest.population
+        }
+        : {
+          type: 'one-account-per-participant',
+          distinctAccounts: manifest.population,
+          simulatedParticipants: manifest.population
+        },
       failedAt: new Date().toISOString(),
+      runtimeBreakdown,
       confirmedOperationCount: operations.length,
       contractAddress: deploymentRecord && deploymentRecord.contractAddress,
       error: {
@@ -923,6 +1121,23 @@ const main = async () => {
     throw new Error('Polygon Amoy requires the explicit --confirm-public-chain flag');
   }
   if (!['anvil', 'polygon-amoy'].includes(network)) throw new Error(`Unsupported network: ${network}`);
+  const reuseAdminAccount = args['reuse-admin-account'] === true;
+  if (reuseAdminAccount && (
+    args['reuse-actor-keys'] === true ||
+    args['actor-keys-file'] !== undefined
+  )) {
+    throw new Error('--reuse-admin-account cannot be combined with actor key file/options');
+  }
+  const reuseActorKeys = args['reuse-actor-keys'] === true || reuseAdminAccount;
+  if (reuseActorKeys && (
+    network !== 'polygon-amoy' ||
+    plans.some(({ population }) => population > 20)
+  )) {
+    throw new Error('--reuse-actor-keys is only allowed for Polygon Amoy smoke runs of population <= 20');
+  }
+  if (reuseAdminAccount && plans.some(({ population }) => population < 2)) {
+    throw new Error('--reuse-admin-account requires at least two simulated participants');
+  }
   const rpcUrl = args['rpc-url'] || (
     network === 'polygon-amoy'
       ? process.env.POLYGON_RPC_URL
@@ -941,6 +1156,9 @@ const main = async () => {
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 50) {
     throw new Error('--concurrency must be an integer between 1 and 50');
   }
+  if (reuseActorKeys && concurrency !== 1) {
+    throw new Error('--reuse-actor-keys requires --concurrency 1 to avoid account nonce races');
+  }
   const outputRoot = path.resolve(args.output || path.join(
     process.cwd(),
     'research-runs',
@@ -957,7 +1175,10 @@ const main = async () => {
       web3,
       actorKeyFile: args['actor-keys-file'],
       plans,
-      administratorAddress
+      administratorAddress,
+      reuseActorKeys,
+      reuseAdminAccount,
+      adminPrivateKey
     })
     : null;
   const artifactPath = path.join(__dirname, '../../build/contracts/ResearchElection.json');
@@ -974,16 +1195,26 @@ const main = async () => {
   const releaseChainLock = acquireChainLock(network, chainId);
   const results = [];
   const campaignPath = path.join(outputRoot, 'campaign.json');
+  const campaignStartedAt = new Date().toISOString();
+  const actorAccountModel = reuseActorKeys
+    ? (reuseAdminAccount
+      ? 'single-admin-actor-account (non-representative)'
+      : 'reused-smoke-accounts (non-representative)')
+    : 'one-account-per-participant';
   try {
     atomicWriteJson(campaignPath, {
       status: 'running',
       network,
       chainId,
       seed,
+      actorAccountModel,
       expectedRuns: plans.length,
-      startedAt: new Date().toISOString()
+      completedRuns: 0,
+      results,
+      startedAt: campaignStartedAt
     });
-    for (const manifest of plans) {
+    for (let index = 0; index < plans.length; index += 1) {
+      const manifest = plans[index];
       console.log(`Running ${manifest.runId} (${manifest.population} participants)`);
       const result = await runOne({
         web3,
@@ -992,10 +1223,25 @@ const main = async () => {
         network,
         outputRoot,
         actorKeys: publicActorKeysByRun && publicActorKeysByRun.get(manifest.runId),
+        reuseActorKeys,
+        reuseAdminAccount,
         adminPrivateKey,
         concurrency
       });
       results.push(result);
+      atomicWriteJson(campaignPath, {
+        status: 'running',
+        network,
+        chainId,
+        seed,
+        actorAccountModel,
+        expectedRuns: plans.length,
+        completedRuns: results.length,
+        results,
+        nextRunId: index + 1 < plans.length ? plans[index + 1].runId : null,
+        startedAt: campaignStartedAt,
+        checkpointedAt: new Date().toISOString()
+      });
       console.log(`${result.status}: ${result.runId}`);
     }
     const campaignResult = {
@@ -1003,9 +1249,11 @@ const main = async () => {
       network,
       chainId,
       seed,
+      actorAccountModel,
       expectedRuns: plans.length,
       completedRuns: results.length,
       results,
+      startedAt: campaignStartedAt,
       completedAt: new Date().toISOString()
     };
     atomicWriteJson(campaignPath, campaignResult);
@@ -1021,9 +1269,11 @@ const main = async () => {
       network,
       chainId,
       seed,
+      actorAccountModel,
       expectedRuns: plans.length,
       completedRuns: results.length,
       results,
+      startedAt: campaignStartedAt,
       failedAt: new Date().toISOString(),
       error: { name: error.name, message: error.message }
     });
@@ -1047,6 +1297,11 @@ module.exports = {
   campaignFromArguments,
   createScenario,
   privateKeyFromSeed,
+  loadPublicActorKeys,
+  actorAccountIndex,
+  estimateActorGasByAccount,
+  estimateGasLimit,
+  retrieveLedger,
   runOne,
   assertAnvilRpc,
   verifyPublicLedger
